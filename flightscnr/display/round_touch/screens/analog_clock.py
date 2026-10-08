@@ -301,7 +301,7 @@ def draw_analog_clock(surface: pygame.Surface, *, night_vision: bool = False) ->
         )
 
     brand_font = draw.load_font(max(theme.s(14), int(22 * scale * 0.55)), bold=True)
-    brand = draw.render_text_cached(brand_font, "FLIGHTSCNRPI", pal.ink)
+    brand = draw.render_text_cached(brand_font, "AV8OR", pal.ink)
     ax, ay = ref(400, 300)
     ax += 20
     surface.blit(brand, brand.get_rect(center=(ax, ay)))
