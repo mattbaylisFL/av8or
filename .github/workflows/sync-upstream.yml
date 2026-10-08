@@ -1,0 +1,198 @@
+name: Sync upstream
+
+# Keeps this private copy current with yashmulgaonkar/FlightScnr_Pi while
+# preserving our customizations.
+#
+#   merge   - merge upstream into a staging branch (no upstream code runs here)
+#   test    - run upstream's tests on the result, read-only token, compared to
+#             the pre-merge baseline (upstream's suite has known failures)
+#   publish - clean merge + no new test failures: fast-forward the default
+#             branch, tag the version and publish a release (the Pi updater
+#             keys off release tags). Otherwise open/refresh an issue.
+#
+# See AV8OR.md for the full story. Never edit VERSION in this repo.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      force_merge:
+        description: "Publish even if the tests show new failures"
+        type: boolean
+        default: false
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  BASE_BRANCH: ${{ github.event.repository.default_branch || github.ref_name }}
+  STAGING_BRANCH: sync/upstream
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      status: ${{ steps.merge.outputs.status }}
+      sha: ${{ steps.merge.outputs.sha }}
+      base_sha: ${{ steps.merge.outputs.base_sha }}
+      conflicts: ${{ steps.merge.outputs.conflicts }}
+      held_back_workflows: ${{ steps.merge.outputs.held_back_workflows }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_BRANCH }}
+          fetch-depth: 0
+      - id: merge
+        run: bash .github/scripts/sync-merge.sh
+
+  test:
+    needs: merge
+    if: needs.merge.outputs.status == 'ready'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      result: ${{ steps.compare.outputs.result }}
+      new_failures: ${{ steps.compare.outputs.new_failures }}
+    steps:
+      - name: Checkout merged tree
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.merge.outputs.sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Checkout baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.merge.outputs.base_sha }}
+          path: base
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11" # matches Raspberry Pi OS Bookworm
+          cache: pip
+          cache-dependency-path: candidate/requirements.txt
+      - name: Install dependencies
+        run: pip install -r candidate/requirements.txt pytest
+      - id: compare
+        run: bash candidate/.github/scripts/compare-tests.sh candidate base
+
+  publish:
+    needs: [merge, test]
+    if: ${{ !cancelled() && needs.merge.outputs.status == 'ready' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SHA: ${{ needs.merge.outputs.sha }}
+      BASE_SHA: ${{ needs.merge.outputs.base_sha }}
+      TEST_RESULT: ${{ needs.test.outputs.result }}
+      NEW_FAILURES: ${{ needs.test.outputs.new_failures }}
+      HELD_BACK: ${{ needs.merge.outputs.held_back_workflows }}
+      FORCE: ${{ inputs.force_merge }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_BRANCH }}
+          fetch-depth: 0
+
+      - name: Publish
+        run: |
+          set -euo pipefail
+          git fetch -q origin "$STAGING_BRANCH"
+          [ "$(git rev-parse FETCH_HEAD)" = "$SHA" ] || { echo "Staging branch moved; retry next run."; exit 1; }
+
+          VERSION="$(git show "$SHA:VERSION" | tr -d '[:space:]')"
+          RANGE_BASE="$(git rev-parse "$SHA^1")"
+          UPSTREAM_SHA="$(git rev-parse "$SHA^2")"
+          COMPARE="https://github.com/$GH_REPO/compare/$BASE_BRANCH...$STAGING_BRANCH"
+          gh label create upstream-sync --color FBCA04 \
+            --description "Upstream sync needs attention" 2>/dev/null || true
+
+          open_or_update_issue() { # title, body
+            local n
+            n="$(gh issue list --label upstream-sync --state open --json number --jq '.[0].number // empty')"
+            if [ -n "$n" ]; then gh issue comment "$n" --body "$2"
+            else gh issue create --label upstream-sync --title "$1" --body "$2"; fi
+          }
+
+          if [ "$TEST_RESULT" != "pass" ] && [ "$FORCE" != "true" ]; then
+            {
+              echo "Upstream \`$VERSION\` merges cleanly into \`$BASE_BRANCH\`, but the test suite shows **new failures** that the pre-merge baseline does not have:"
+              echo; echo '```'; printf '%s\n' "${NEW_FAILURES:-(the test job did not finish - see the run log)}"; echo '```'; echo
+              echo "Nothing was published. Review the merge: $COMPARE"
+              echo; echo "If it is acceptable (or the failure is a flaky upstream test), re-run **Sync upstream** from the Actions tab with *force_merge* enabled."
+            } > body.md
+            open_or_update_issue "Upstream sync $VERSION needs review: new test failures" "$(cat body.md)"
+            exit 0
+          fi
+
+          # Fast-forward only: if the default branch moved meanwhile this fails
+          # and the next scheduled run starts over from the new tip.
+          git push origin "$SHA:refs/heads/$BASE_BRANCH"
+          git push origin --delete "$STAGING_BRANCH" || true
+
+          if [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){3}$ ]] \
+             && ! git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1; then
+            {
+              echo "Synced from [yashmulgaonkar/FlightScnr_Pi](https://github.com/yashmulgaonkar/FlightScnr_Pi) (CC BY-NC-SA 4.0), with av8or customizations."
+              echo
+              (git log --no-merges --format='* %s' "$RANGE_BASE..$UPSTREAM_SHA" || true) | head -60
+              if [ -n "$HELD_BACK" ]; then
+                echo; echo "Upstream workflow changes not applied: $HELD_BACK"
+              fi
+            } > notes.md
+            gh release create "$VERSION" --target "$SHA" --title "FlightScnr Pi $VERSION" --notes-file notes.md --latest
+          else
+            echo "No new release tag for VERSION='$VERSION' (unchanged or malformed)."
+          fi
+
+          for n in $(gh issue list --label upstream-sync --state open --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "Resolved: upstream $VERSION was merged automatically ($SHA)."
+          done
+
+          {
+            echo "### Synced upstream $VERSION"
+            echo "Fast-forwarded \`$BASE_BRANCH\` to \`${SHA:0:7}\`."
+            [ -n "$HELD_BACK" ] && echo "Upstream workflow changes held back: \`$HELD_BACK\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          true
+
+  conflict:
+    needs: merge
+    if: needs.merge.outputs.status == 'conflict'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CONFLICTS: ${{ needs.merge.outputs.conflicts }}
+    steps:
+      - name: Report merge conflicts
+        run: |
+          set -euo pipefail
+          gh label create upstream-sync --color FBCA04 \
+            --description "Upstream sync needs attention" 2>/dev/null || true
+          {
+            echo "Merging upstream into \`$BASE_BRANCH\` conflicts with our customizations in:"
+            echo; echo '```'; echo "$CONFLICTS" | tr ',' '\n'; echo '```'; echo
+            echo "Resolve locally (or ask Claude Code to):"
+            echo; echo '```sh'
+            echo "git remote add upstream https://github.com/yashmulgaonkar/FlightScnr_Pi.git   # once"
+            echo "git fetch upstream && git merge upstream/main"
+            echo "# resolve, then: git commit && git push"
+            echo '```'
+            echo; echo "Tip: if the same file conflicts repeatedly, move that customization out of the upstream file (see AV8OR.md)."
+          } > body.md
+          n="$(gh issue list --label upstream-sync --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$n" ]; then gh issue comment "$n" --body-file body.md
+          else gh issue create --label upstream-sync --title "Upstream sync has merge conflicts" --body-file body.md; fi
