@@ -198,6 +198,30 @@ class TestTapToDismiss:
         assert airport_tile.hit(rect.centerx, rect.centery) is True
         assert airport_tile.hit(rect.right + 30, rect.bottom + 30) is False
 
+    @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
+    def test_magnify_pill_opens_that_airport(self, monkeypatch):
+        monkeypatch.setattr(airport_tile, "_start_fetch", lambda ident: None)
+        airport_tile.open_tile({
+            "ident": "KSAN", "name": "San Diego Intl",
+            "lat": 32.7336, "lon": -117.1897,
+        })
+        airport_tile._set_metar_for_tests(metar.parse_api_row(_API_ROW))
+        surface = pygame.Surface((theme.SIZE, theme.SIZE), pygame.SRCALPHA)
+        airport_tile.draw(surface)
+        zoom = airport_tile._zoom_button_rect
+        board = airport_tile._board_button_rect
+        assert zoom is not None and board is not None
+        assert zoom.right <= board.left
+        assert not zoom.colliderect(board)
+        opened = airport_tile.zoom_button_hit(zoom.centerx, zoom.centery)
+        assert opened is not None
+        assert opened["ident"] == "KSAN"
+        assert airport_tile.board_button_hit(board.centerx, board.centery) == "KSAN"
+        assert airport_tile.zoom_button_hit(board.centerx, board.centery) is None
+
+    def test_zoom_hit_false_when_closed(self):
+        assert airport_tile.zoom_button_hit(360, 360) is None
+
 
 class TestTileDraw:
     @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")

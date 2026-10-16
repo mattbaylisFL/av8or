@@ -20,6 +20,7 @@ thread; the tile shows a fetching hint until data lands.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 
@@ -57,11 +58,17 @@ _last_rect: "pygame.Rect | None" = None
 # Screen rect of the "open the arrivals board" pill, in panel-relative terms
 # resolved at blit time. None while the tile is closed or the pill is hidden.
 _board_button_rect: "pygame.Rect | None" = None
+# Screen rect of the magnifying-glass pill that opens the airport map.
+_zoom_button_rect: "pygame.Rect | None" = None
+_magnify_cache: dict[tuple[int, tuple[int, int, int]], pygame.Surface] = {}
+_MAGNIFY_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "assets", "magnify.png")
+)
 
 
 def _reset_for_tests() -> None:
     global _airport, _metar, _fetch_done, _fetch_done_at, _opened_at
-    global _closed_reported, _last_rect
+    global _closed_reported, _last_rect, _board_button_rect, _zoom_button_rect
     _airport = None
     _metar = None
     _fetch_done = False
@@ -69,6 +76,8 @@ def _reset_for_tests() -> None:
     _opened_at = 0.0
     _closed_reported = True
     _last_rect = None
+    _board_button_rect = None
+    _zoom_button_rect = None
 
 
 def _set_metar_for_tests(m: dict | None, *, done: bool = True) -> None:
@@ -126,12 +135,13 @@ def is_open() -> bool:
 
 
 def dismiss() -> None:
-    global _airport, _metar, _fetch_done, _last_rect, _board_button_rect
+    global _airport, _metar, _fetch_done, _last_rect, _board_button_rect, _zoom_button_rect
     _airport = None
     _metar = None
     _fetch_done = False
     _last_rect = None
     _board_button_rect = None
+    _zoom_button_rect = None
 
 
 def hit(x: int, y: int) -> bool:
@@ -148,6 +158,43 @@ def board_button_hit(x: int, y: int) -> str | None:
     if not _board_button_rect.collidepoint(int(x), int(y)):
         return None
     return str(_airport.get("ident") or "").upper() or None
+
+
+def zoom_button_hit(x: int, y: int) -> dict | None:
+    """Airport under the magnifying glass, when that pill was tapped."""
+    if _airport is None or _zoom_button_rect is None:
+        return None
+    if not _zoom_button_rect.collidepoint(int(x), int(y)):
+        return None
+    return dict(_airport)
+
+
+def _magnify_icon(size: int, color: tuple[int, int, int]) -> pygame.Surface | None:
+    """``assets/magnify.png`` recolored to the tile accent. The file is black."""
+    size = max(8, int(size))
+    key = (size, color)
+    cached = _magnify_cache.get(key)
+    if cached is not None:
+        return cached
+    if not os.path.isfile(_MAGNIFY_PATH):
+        return None
+    try:
+        raw = pygame.image.load(_MAGNIFY_PATH)
+        try:
+            raw = raw.convert_alpha()
+        except pygame.error:
+            pass
+        glyph = pygame.transform.smoothscale(raw, (size, size))
+        # Black pixels stay black under a multiply tint. Lift RGB to white
+        # first so the accent color shows through, and keep the alpha.
+        glyph.fill((255, 255, 255, 255), special_flags=pygame.BLEND_RGB_MAX)
+        tint = pygame.Surface(glyph.get_size(), pygame.SRCALPHA)
+        tint.fill((*color, 255))
+        glyph.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    except pygame.error:
+        return None
+    _magnify_cache[key] = glyph
+    return glyph
 
 
 def tick() -> bool:
@@ -276,7 +323,7 @@ def _tile_ink() -> tuple[tuple[int, int, int], tuple[int, int, int]]:
 
 def draw(surface: pygame.Surface) -> pygame.Rect | None:
     """Draw the tile; returns its rect or None when closed."""
-    global _last_rect, _board_button_rect
+    global _last_rect, _board_button_rect, _zoom_button_rect
     if _airport is None:
         return None
     from display.round_touch import radar_hud
@@ -313,6 +360,11 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
 
     pad = theme.s(10)
     gap = theme.s(3)
+    btn_h = max(10, theme.s(16))
+    btn_w = max(18, theme.s(30))
+    zoom_side = btn_h
+    btn_gap = theme.s(4)
+    buttons_w = zoom_side + btn_gap + btn_w
     label_w = max(label_font.size(lbl)[0] for lbl, _ in rows) + theme.s(8) if rows else 0
     row_h = value_font.get_height() + gap
     width = max(
@@ -320,6 +372,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
         ident_font.size(ident)[0] + theme.s(84),
         name_font.size(name[:34])[0] + pad * 2,
         max((label_w + value_font.size(v)[0] for _, v in rows), default=0) + pad * 2,
+        buttons_w + pad * 2 + theme.s(36),
     )
     height = (
         pad
@@ -413,6 +466,23 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     panel.blit(pill, (btn_x, btn_y))
     _panel_button = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
 
+    # Magnifying glass opens the airport map. Sits immediately left of arrivals.
+    zoom_x = btn_x - btn_gap - zoom_side
+    zoom_y = btn_y + (btn_h - zoom_side) // 2
+    zoom = pygame.Surface((zoom_side, zoom_side), pygame.SRCALPHA)
+    pygame.draw.rect(
+        zoom, (*accent_rgb, 38), zoom.get_rect(), border_radius=zoom_side // 2
+    )
+    pygame.draw.rect(
+        zoom, (*accent_rgb, 190), zoom.get_rect(),
+        width=max(1, theme.s(1)), border_radius=zoom_side // 2,
+    )
+    icon = _magnify_icon(max(8, int(zoom_side * 0.72)), accent_rgb)
+    if icon is not None:
+        zoom.blit(icon, icon.get_rect(center=(zoom_side // 2, zoom_side // 2)))
+    panel.blit(zoom, (zoom_x, zoom_y))
+    _panel_zoom = pygame.Rect(zoom_x, zoom_y, zoom_side, zoom_side)
+
     anchor_xy = None
     try:
         from display.round_touch.airport_overlay import _screen_xy
@@ -430,6 +500,10 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     _board_button_rect = pygame.Rect(
         rect.x + _panel_button.x, rect.y + _panel_button.y,
         _panel_button.width, _panel_button.height,
+    )
+    _zoom_button_rect = pygame.Rect(
+        rect.x + _panel_zoom.x, rect.y + _panel_zoom.y,
+        _panel_zoom.width, _panel_zoom.height,
     )
     return rect
 

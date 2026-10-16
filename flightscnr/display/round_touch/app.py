@@ -77,6 +77,7 @@ from display.round_touch.screens import (
     earthquake_detail,
     flight_detail,
     forecast,
+    airport_ground,
     info,
     moon,
     radar,
@@ -109,6 +110,7 @@ SCREEN_ISS = "iss"
 # hold, including the pin that cancels it.
 FLIP_BOARD_TIMEOUT_S = 60.0
 SCREEN_FORECAST = "forecast"
+SCREEN_AIRPORT = "airport_ground"
 SCREEN_TRACKED = "tracked"
 SCREEN_LIVE = "live_tracking"
 SCREEN_WIFI_SETUP = "wifi_setup"
@@ -1091,6 +1093,8 @@ class RoundTouchDisplay:
             )
         elif self.screen == SCREEN_FORECAST:
             forecast.draw_forecast(self.surface)
+        elif self.screen == SCREEN_AIRPORT:
+            airport_ground.draw(self.surface, self._airport_flights())
         elif self.screen == SCREEN_TRACKED:
             if not self.overhead.processing:
                 self._refresh_flights()
@@ -1348,6 +1352,9 @@ class RoundTouchDisplay:
         if time.time() < self._boot_until:
             return None
         if self.screen in (SCREEN_WIFI_SETUP, SCREEN_DISCLAIMER):
+            return None
+        if self.screen == SCREEN_AIRPORT:
+            # Stays up until the footer radar button.
             return None
         if self.screen in (SCREEN_RADAR, SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST):
             return None
@@ -1756,6 +1763,8 @@ class RoundTouchDisplay:
             aircraft_tile.dismiss()
         if self.screen in (SCREEN_TRACKED, SCREEN_LIVE):
             tracked.reset_marquee()
+        if self.screen == SCREEN_AIRPORT:
+            airport_ground.close()
         self._radar_visible_since = time.time()
         self._auto_idle_clock = False
         self.screen = SCREEN_RADAR
@@ -1814,6 +1823,8 @@ class RoundTouchDisplay:
             self._last_clock_draw = 0.0
         previous = self.screen
         if screen != self.screen:
+            if self.screen == SCREEN_AIRPORT:
+                airport_ground.close()
             if self.screen == SCREEN_FLIP_BOARD:
                 # The tile belongs to the board; leaving closes it, so it does
                 # not reappear over a board the user comes back to later.
@@ -2003,6 +2014,7 @@ class RoundTouchDisplay:
             "chime_volume",
             "traffic_sfx_volume",
             "military_sfx_volume",
+            "iss_sfx_volume",
             "earthquake_voice_volume",
         ):
             # Switch and slider are hit-tested directly on the row.
@@ -2585,6 +2597,7 @@ class RoundTouchDisplay:
             "hourly_chime": "chime_volume",
             "traffic_sfx": "traffic_sfx_volume",
             "military_sfx": "military_sfx_volume",
+            "iss_sfx": "iss_sfx_volume",
             "earthquake_voice": "earthquake_voice_volume",
         }.get(action)
         if volume_action is None:
@@ -2594,6 +2607,10 @@ class RoundTouchDisplay:
             radar.invalidate_frame_layer()
         elif action == "traffic_sfx":
             settings.toggle_traffic_sfx_enabled()
+        elif action == "military_sfx":
+            settings.toggle_military_sfx_enabled()
+        elif action == "iss_sfx":
+            settings.toggle_iss_sfx_enabled()
         elif action == "earthquake_voice":
             settings.toggle_earthquake_voice_enabled()
             if settings.earthquake_voice_enabled():
@@ -3676,6 +3693,23 @@ class RoundTouchDisplay:
         """Flights with dead-reckoned positions for radar draw / tap hit-testing."""
         return self._position_smoother.apply(self.flights)
 
+    def _airport_flights(self) -> list:
+        """Campus-map traffic, including aircraft under the radar floors.
+
+        Min altitude is dropped in the overhead grab before ``peek_data()``.
+        Min speed is applied only when the radar draws. Neither applies here.
+        """
+        try:
+            flights = list(self.overhead.peek_data_unfiltered() or [])
+        except Exception:
+            flights = list(self.flights or [])
+        mode = settings.traffic_mode()
+        if mode == "marine":
+            flights = []
+        if mode in ("marine", "both") and getattr(self, "_ais_vessels", None):
+            flights.extend(self._ais_vessels)
+        return self._position_smoother.apply(flights)
+
     def _open_flight_at(self, x: int, y: int, alt_x: int | None = None, alt_y: int | None = None) -> bool:
         picked, _ = radar.pick_flight_at(self._radar_flights(), x, y, alt_x, alt_y)
         return self._open_picked_flight(picked)
@@ -4272,7 +4306,7 @@ class RoundTouchDisplay:
         if self.screen in (
             SCREEN_SETTINGS, SCREEN_DETAILS, SCREEN_FLIGHT, SCREEN_FIRE, SCREEN_QUAKE,
             SCREEN_FORECAST, SCREEN_UPDATE_NOTES,
-            SCREEN_TRACKED,
+            SCREEN_TRACKED, SCREEN_AIRPORT,
         ):
             return nav.tap_breadcrumb_curved(x, y)
         return nav.tap_breadcrumb(x, y)
@@ -5098,6 +5132,19 @@ class RoundTouchDisplay:
                     weather_data.request_fetch_now()
                     self._note_activity()
                     self._safe_draw()
+        elif tap and self.screen == SCREEN_AIRPORT:
+            action = airport_ground.tap_footer_action(tap[0], tap[1])
+            if action == "radar":
+                self._return_to_radar()
+                self._safe_draw()
+            else:
+                picked = airport_ground.pick_flight(
+                    self._airport_flights(), tap[0], tap[1],
+                )
+                if picked and self._open_picked_flight(picked):
+                    self._safe_draw()
+                else:
+                    self._note_activity()
         elif tap and self.screen == SCREEN_DETAILS:
             action = details.tap_footer_action(tap[0], tap[1])
             if action == "next":
@@ -5852,6 +5899,17 @@ class RoundTouchDisplay:
         from display.round_touch import airport_tile
 
         board_ident = airport_tile.board_button_hit(x, y)
+        zoomed = airport_tile.zoom_button_hit(x, y)
+        if zoomed:
+            airport_tile.dismiss()
+            radar.invalidate_frame_layer()
+            if zoomed.get("lat") is not None and zoomed.get("lon") is not None:
+                airport_ground.open_map(zoomed)
+                self._auto_idle_clock = False
+                self._open_screen(SCREEN_AIRPORT)
+            self._note_activity()
+            self._safe_draw()
+            return True
         if board_ident:
             # The pill opens that field's arrivals board. Checked before the
             # dismiss below, which owns the rest of the tile.
@@ -6380,6 +6438,9 @@ class RoundTouchDisplay:
                     self._live_map_redraw = False
                     self._safe_draw()
 
+                if airport_ground.consume_redraw() and self.screen == SCREEN_AIRPORT:
+                    self._safe_draw()
+
                 if route_map.basemap_needs_redraw() and self.screen == SCREEN_TRACKED:
                     self._safe_draw()
 
@@ -6484,6 +6545,13 @@ class RoundTouchDisplay:
                             self._loop_stage("loop_prewarm_spawn", _lt)
                 elif self.screen == SCREEN_ISS:
                     self._tick_iss()
+                elif self.screen == SCREEN_AIRPORT:
+                    # Same cadence as the radar so dead-reckoned blips glide
+                    # between ADS-B polls instead of waiting for the next grab.
+                    now_draw = time.time()
+                    if (now_draw - self._last_static_draw) * 1000 >= theme.SWEEP_FRAME_MS:
+                        self._last_static_draw = now_draw
+                        self._safe_draw()
                 elif self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST):
                     self._tick_clock()
                 elif self.screen in (SCREEN_TRACKED, SCREEN_LIVE):
@@ -6593,7 +6661,9 @@ class RoundTouchDisplay:
                 _sleep_t = time.perf_counter()
                 ring_animating = self._timeout_remaining_fraction() is not None
                 requested = (
-                    0.004 if self.screen == SCREEN_RADAR or ring_animating else 0.01
+                    0.004
+                    if self.screen in (SCREEN_RADAR, SCREEN_AIRPORT) or ring_animating
+                    else 0.01
                 )
                 time.sleep(requested)
                 if FRAME_DEBUG:
