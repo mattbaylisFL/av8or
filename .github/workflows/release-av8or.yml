@@ -1,0 +1,89 @@
+name: Release av8or
+
+# Cuts a release for this repo's OWN changes. The Pi updates only when the
+# version string goes up, and "Sync upstream" tags only when upstream's
+# VERSION changes, so without this job a merged PR here would not reach any
+# device until upstream's next release.
+#
+# Version scheme: today's date with iteration >= 10 (2026.10.27.10, .11, ...).
+# Upstream uses .1 .2 .3 for its same-day releases, so the two never collide,
+# and any upstream release on a later day still sorts higher. The one cost:
+# an upstream release later the SAME day sorts below ours and reaches devices
+# with the next release (upstream ships almost daily). See AV8OR.md.
+#
+# Runs on pushes to the default branch by people. Pushes by the sync bot are
+# skipped: its merges are either tagged by the sync job (upstream VERSION
+# changed) or carry nothing of ours. A push whose head is already tagged
+# (this job's own release commit) is skipped too.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: sync-upstream   # serialize with the sync workflow; both push main
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  release:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Decide version
+        id: ver
+        run: |
+          set -euo pipefail
+          if [ -n "$(git tag --points-at HEAD)" ]; then
+            echo "HEAD is already tagged ($(git tag --points-at HEAD | tr '\n' ' ')); nothing to release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          cur="$(tr -d '[:space:]' < VERSION)"
+          ver="$(python3 .github/scripts/next-av8or-version.py "$cur")"
+          echo "Releasing $ver (VERSION on main was $cur)"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "previous=$cur" >> "$GITHUB_OUTPUT"
+
+      - name: Commit VERSION, tag, publish
+        if: steps.ver.outputs.skip != 'true'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          PREVIOUS: ${{ steps.ver.outputs.previous }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          printf '%s\n' "$VERSION" > VERSION
+          git add VERSION
+          git commit -m "Release av8or $VERSION"
+          git tag -a "$VERSION" -m "av8or $VERSION"
+          # Fast-forward only; if main moved meanwhile, the next push retries.
+          git push origin HEAD:refs/heads/main
+          git push origin "refs/tags/$VERSION"
+          {
+            echo "av8or edition release. Changes in this repo since \`$PREVIOUS\`:"
+            echo
+            prev_tag="$(git tag -l "$PREVIOUS" | head -1)"
+            if [ -n "$prev_tag" ]; then
+              git log --no-merges --format='* %s' "$prev_tag..HEAD^" | grep -v '^\* Release ' | head -40
+            else
+              git log --no-merges --format='* %s' -20 "HEAD^"
+            fi
+            echo
+            echo "Based on [FlightScnr Pi](https://github.com/yashmulgaonkar/FlightScnr_Pi) by Yash Mulgaonkar (CC BY-NC-SA 4.0), with changes."
+          } > notes.md
+          gh release create "$VERSION" --target "$(git rev-parse HEAD)" \
+            --title "av8or $VERSION" --notes-file notes.md --latest
+          echo "### Released av8or $VERSION" >> "$GITHUB_STEP_SUMMARY"
