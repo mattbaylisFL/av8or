@@ -14,6 +14,8 @@ Priority (highest wins):
   1. Environment variables (e.g. /etc/flightscnr.env via systemd)
   2. Web portal file: /var/lib/flightscnr/secrets.json
   3. Project file: config.h in the repo root
+  4. av8or seed file: /etc/flightscnr/seed.conf (survives updates and
+     factory reset; see av8or_seed.py)
 
 Call bootstrap_secrets() before reading keys in config.py.
 """
@@ -222,13 +224,23 @@ def api_enabled(key_name: str) -> bool:
 
 
 def _merged_secrets() -> dict[str, str]:
-    merged = load_config_h()
+    from av8or_seed import load_seed_conf
+
+    merged = load_seed_conf()
+    # config.h is created from a template with blank keys; a blank must not
+    # shadow a seeded value.
+    for key, value in load_config_h().items():
+        if str(value).strip() or key not in merged:
+            merged[key] = value
     merged.update(load_secrets_json())
     return merged
 
 
 def bootstrap_secrets() -> None:
-    """Apply config.h + secrets.json to os.environ when env vars are unset."""
+    """Apply seed.conf + config.h + secrets.json to os.environ when env vars are unset."""
+    from av8or_seed import apply_seed_data
+
+    apply_seed_data(DATA_DIR)
     for key, value in _merged_secrets().items():
         if key in CONFIG_H_SETTINGS and value and not os.environ.get(key, "").strip():
             os.environ[key] = value
@@ -449,8 +461,10 @@ def secrets_status() -> dict:
             source = "environment"
         elif file_val and os.path.isfile(SECRETS_JSON_PATH) and key in load_secrets_json():
             source = "web portal"
-        elif file_val and os.path.isfile(CONFIG_H_PATH):
+        elif file_val and os.path.isfile(CONFIG_H_PATH) and load_config_h().get(key, "").strip():
             source = "config.h"
+        elif file_val:
+            source = "seed"
         status[key] = {
             "configured": bool(active),
             "masked": mask_secret(active),

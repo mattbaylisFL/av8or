@@ -24,7 +24,7 @@ import requests
 
 logger = logging.getLogger("flightscnr.updater")
 
-GITHUB_REPO = os.environ.get("FLIGHTSCNR_GITHUB_REPO", "yashmulgaonkar/FlightScnr_Pi")
+GITHUB_REPO = os.environ.get("FLIGHTSCNR_GITHUB_REPO", "mattbaylisFL/av8or")
 GITHUB_BRANCH = os.environ.get("FLIGHTSCNR_GITHUB_BRANCH", "main")
 GITHUB_API = "https://api.github.com"
 DATA_DIR = os.environ.get("FLIGHTSCNR_DATA_DIR", "/var/lib/flightscnr")

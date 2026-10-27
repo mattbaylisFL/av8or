@@ -1,0 +1,33 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// av8or edition — device seed (template)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Copy to /etc/flightscnr/seed.conf on the Pi:
+//     sudo install -d -m 755 /etc/flightscnr
+//     sudo install -m 600 av8or-seed.conf.example /etc/flightscnr/seed.conf
+//     sudo nano /etc/flightscnr/seed.conf
+//
+// Same format as config.h. Lowest priority: the web portal, config.h and
+// /etc/flightscnr.env all override it. Unlike those, this file is NOT removed
+// by "Update Now" or by the portal's Factory reset, so a reset comes back
+// pre-configured. Never commit a filled-in copy of this file.
+//
+// To also pre-load portal settings (theme, units, watch list...), put files in
+// /etc/flightscnr/seed/data/ — e.g. round_touch_settings.json copied from
+// /var/lib/flightscnr/ once the device is set up the way you want. They are
+// copied in only when missing (first boot, or after a factory reset).
+
+// FlightRadar24 subscription (format: subscription_key|jwt_token)
+FR24_API_KEY =
+
+// Tomorrow.io weather — https://www.tomorrow.io/weather-api/
+TOMORROW_API_KEY =
+
+// Optional extras
+// AIRLABS_API_KEY =
+// AISSTREAM_API_KEY =
+// FIRMS_MAP_KEY =
+
+// Radar center (the owner's address; set here or in the portal)
+// HOME_LAT = 28.429394
+// HOME_LON = -81.308994

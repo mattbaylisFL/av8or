@@ -22,6 +22,9 @@ Deliberately tiny, so upstream merges stay automatic:
 | Boot / About image: Yash's contact-email line → "Custom edition · Av8oR" (his credit line is kept) | `flightscnr/assets/boot/brand_plate.png`, `about.png`, `splash.png` |
 | Guard test: fails if an upstream refactor drops the wordmark | `flightscnr/tests/test_av8or_brand.py` |
 | Default radar center for a fresh install: SFO → Orlando International (MCO) | `config.h.example` (two lines; the installer copies it to the untracked `config.h`) |
+| Updater, factory reset and repair script default to this repo instead of upstream, so `FLIGHTSCNR_GITHUB_REPO` is no longer needed in `/etc/flightscnr.env` and a factory reset re-clones *this* repo | `flightscnr/utilities/updater.py`, `flightscnr/setup/portal-factory-reset.sh`, `scripts/repair-ota.sh` (one line each) |
+| Device seed: `/etc/flightscnr/seed.conf` + `/etc/flightscnr/seed/data/` pre-configure keys, location and portal settings and survive updates *and* factory reset | `flightscnr/av8or_seed.py` (new), 3 small hooks in `flightscnr/secrets_store.py`, template `av8or-seed.conf.example` |
+| Guard tests for the above | `flightscnr/tests/test_av8or_seed.py` |
 
 The guard test matters: without it a merge that silently lost the wordmark would
 still count as a success. With it, the sync holds the merge and opens an issue.
@@ -41,7 +44,8 @@ upstream/main ──merge──▶ sync/upstream ──tests vs. baseline──�
 - **Clean merge, no new test failures:** the default branch is fast-forwarded,
   the upstream `VERSION` is tagged and a release is published. Nothing to do.
 - **Conflict or new test failures:** nothing is published; an issue explains
-  what to do. The issue closes itself once a later run succeeds.
+  what to do, assigned to the repo owner (which is what makes GitHub send the
+  email). The issue closes itself once a later run succeeds.
 - **Tests:** upstream's suite has ~30 known failures at any given time, so the
   gate compares against the pre-merge baseline *and* against pure upstream, and
   only blocks failures unique to the merge. A test that fails on upstream itself
@@ -87,16 +91,34 @@ git clone https://github.com/mattbaylisFL/av8or.git ~/FlightScnr_Pi
 cd ~/FlightScnr_Pi && sudo ./install-pi.sh
 ```
 
-Then point the updater at this repo by adding to `/etc/flightscnr.env`:
+The updater, factory reset and repair script already default to this repo, so
+no `/etc/flightscnr.env` edit is needed. Per-device settings (location, watch
+list, API keys) are entered on the device through the portal and never go into
+this repo.
 
-```
-FLIGHTSCNR_GITHUB_REPO=mattbaylisFL/av8or
+## Pre-configuring a device
+
+Everything the portal stores lives in `/var/lib/flightscnr` and is wiped by the
+portal's **Factory reset**. To make a device come back pre-configured, put the
+baseline under `/etc/flightscnr/`, which nothing in the app removes:
+
+```sh
+sudo install -d -m 755 /etc/flightscnr /etc/flightscnr/seed/data
+sudo install -m 600 ~/FlightScnr_Pi/av8or-seed.conf.example /etc/flightscnr/seed.conf
+sudo nano /etc/flightscnr/seed.conf          # API keys, HOME_LAT/HOME_LON
 ```
 
-*(Written from reading the updater/installer code; not yet exercised on
-hardware, so test an update on a Pi before gifting.)* Per-device settings
-(location, watch list, API keys) are entered on the device itself through the
-portal and never go into this repo.
+`seed.conf` is the lowest-priority key source (portal and config.h override it).
+Once the device is set up the way you want through the portal, snapshot the
+portal-managed files too; they are copied back in only when missing, i.e. on
+first boot or after a reset:
+
+```sh
+sudo cp /var/lib/flightscnr/round_touch_settings.json /etc/flightscnr/seed/data/
+sudo cp /var/lib/flightscnr/alert_prefs.json          /etc/flightscnr/seed/data/   # if present
+```
+
+A seeded `secrets.json` in `seed/data/` also works and is chmod 600 on copy.
 
 ## Other ideas (not done), by merge safety
 
