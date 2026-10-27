@@ -61,9 +61,35 @@ Why tags matter: the Pi decides whether an update exists by comparing `VERSION`
 with the newest **release tag** (`flightscnr/utilities/updater.py`), so the sync
 job must publish tags or devices will never see updates.
 
+### Releases for our own changes (`release-av8or.yml`)
+
+The Pi only updates when the version string goes *up*, and the sync job only
+tags upstream's `VERSION`. So a PR merged here would never reach a device on
+its own ("Up to date" even though the commit changed). `release-av8or.yml`
+closes that gap: every push to the default branch made by a person (a merged
+PR, a direct push) gets a release of its own.
+
+- Version = today's date with **iteration 10 or higher**: `2026.10.27.10`,
+  `.11`, ... Upstream uses `.1`, `.2`, `.3` on its own same-day releases, so
+  the two never collide and an upstream release on any later day still sorts
+  higher.
+- The workflow commits the new `VERSION`, tags it and publishes a GitHub
+  release titled `av8or <version>`. Pushes by the sync bot and commits that are
+  already tagged are skipped, so it never loops.
+- When upstream and this repo both bumped `VERSION`, the sync merge resolves
+  it by itself: upstream's value if it is newer, otherwise the next av8or
+  iteration for today, so the merge still ships. `VERSION` is never a reported
+  conflict.
+- Same-day caveat: an upstream release later the same day (say `2026.10.27.2`
+  after our `.10`) is merged and shipped as `2026.10.27.11`, not under
+  upstream's number. Release notes still say which upstream version it carries.
+
+To ship something without a code change, run **Release av8or** from the
+Actions tab (workflow_dispatch).
+
 ### Rules that keep merges painless
 
-1. **Never edit `VERSION`.** The sync job tags whatever upstream's value is.
+1. **Never edit `VERSION` by hand.** The sync job and `release-av8or.yml` own it.
 2. **Prefer new files and swapped binary assets** over edits to upstream files.
 3. **Avoid the hot files** (upstream commits touching them since July):
    `display/round_touch/app.py` (147), `web/templates/index.html` (122),
