@@ -25,6 +25,7 @@ Deliberately tiny, so upstream merges stay automatic:
 | Updater, factory reset and repair script default to this repo instead of upstream, so `FLIGHTSCNR_GITHUB_REPO` is no longer needed in `/etc/flightscnr.env` and a factory reset re-clones *this* repo | `flightscnr/utilities/updater.py`, `flightscnr/setup/portal-factory-reset.sh`, `scripts/repair-ota.sh` (one line each) |
 | Device seed: `/etc/flightscnr/seed.conf` + `/etc/flightscnr/seed/data/` pre-configure keys, location and portal settings and survive updates *and* factory reset | `flightscnr/av8or_seed.py` (new), 3 small hooks in `flightscnr/secrets_store.py`, template `av8or-seed.conf.example` |
 | Guard tests for the above | `flightscnr/tests/test_av8or_seed.py` |
+| Web portal header: "Av8oR · Av8oR edition" title and a credit line linking upstream and the license | `flightscnr/web/static/av8or.js` (new) + one `<script>` line in `web/templates/index.html` |
 
 The guard test matters: without it a merge that silently lost the wordmark would
 still count as a success. With it, the sync holds the merge and opens an issue.
