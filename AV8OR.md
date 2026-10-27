@@ -21,6 +21,7 @@ Deliberately tiny, so upstream merges stay automatic:
 | Clock wordmark `FLIGHTSCNRPI` → `AV8OR` | `flightscnr/display/round_touch/screens/flieger_clock.py`, `analog_clock.py` (one line each) |
 | Boot / About image: Yash's contact-email line → "Custom edition · Av8oR" (his credit line is kept) | `flightscnr/assets/boot/brand_plate.png`, `about.png`, `splash.png` |
 | Guard test: fails if an upstream refactor drops the wordmark | `flightscnr/tests/test_av8or_brand.py` |
+| Default radar center for a fresh install: SFO → Orlando International (MCO) | `config.h.example` (two lines; the installer copies it to the untracked `config.h`) |
 
 The guard test matters: without it a merge that silently lost the wordmark would
 still count as a success. With it, the sync holds the merge and opens an issue.
