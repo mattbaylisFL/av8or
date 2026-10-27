@@ -59,6 +59,7 @@ blocking=()
 for path in "${unmerged[@]}"; do
     case "$path" in
         .github/workflows/*) ;;
+        VERSION) ;;   # resolved below: both sides bump it, never a real conflict
         *) blocking+=("$path") ;;
     esac
 done
@@ -84,8 +85,20 @@ git rm -rq --cached --ignore-unmatch -- .github/workflows
 rm -rf .github/workflows
 git checkout HEAD -- .github/workflows
 
-version="$(tr -d '[:space:]' < VERSION)"
-git commit -q -m "Merge upstream FlightScnr_Pi ${version} (${upstream_sha:0:7})"
+# VERSION: devices update only when the version string rises, and the
+# release-av8or workflow bumps it on this side (iteration >= 10, see that
+# workflow), so the two sides usually both changed it. Rule:
+#   upstream's version is newer than ours  -> take upstream's (the publish job
+#                                             tags it as "FlightScnr Pi x.y.z.n")
+#   otherwise (same-day av8or release)     -> next av8or iteration for today,
+#                                             so this merge still ships
+ours_version="$(git show "$base_sha:VERSION" | tr -d '[:space:]')"
+theirs_version="$(git show "$upstream_sha:VERSION" | tr -d '[:space:]')"
+version="$(python3 .github/scripts/next-av8or-version.py "$ours_version" "$theirs_version")"
+printf '%s\n' "$version" > VERSION
+git add VERSION
+
+git commit -q -m "Merge upstream FlightScnr_Pi ${theirs_version} (${upstream_sha:0:7})"
 
 sha="$(git rev-parse HEAD)"
 if [ "$PUSH" = "1" ]; then

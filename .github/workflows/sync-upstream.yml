@@ -11,7 +11,8 @@ name: Sync upstream
 #             branch, tag the version and publish a release (the Pi updater
 #             keys off release tags). Otherwise open/refresh an issue.
 #
-# See AV8OR.md for the full story. Never edit VERSION in this repo.
+# See AV8OR.md for the full story. VERSION is managed by this workflow and by
+# release-av8or.yml; never edit it by hand.
 
 on:
   schedule:
@@ -55,6 +56,7 @@ jobs:
         with:
           ref: ${{ env.BASE_BRANCH }}
           fetch-depth: 0
+          fetch-tags: true   # sync-merge.sh picks the next av8or iteration from existing tags
       - id: merge
         run: bash .github/scripts/sync-merge.sh
 
