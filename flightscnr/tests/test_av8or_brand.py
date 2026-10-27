@@ -17,8 +17,11 @@ holds the merge and opens an issue. See AV8OR.md.
 
 from pathlib import Path
 
-SCREENS = Path(__file__).resolve().parent.parent / "display" / "round_touch" / "screens"
+ROOT = Path(__file__).resolve().parent.parent
+SCREENS = ROOT / "display" / "round_touch" / "screens"
 WORDMARK_FILES = ("flieger_clock.py", "analog_clock.py")
+PORTAL_TEMPLATE = ROOT / "web" / "templates" / "index.html"
+PORTAL_SCRIPT = ROOT / "web" / "static" / "av8or.js"
 
 
 def test_clock_wordmark_is_av8or():
@@ -26,3 +29,12 @@ def test_clock_wordmark_is_av8or():
         source = (SCREENS / name).read_text(encoding="utf-8")
         assert '"AV8OR"' in source, f"{name}: av8or wordmark missing"
         assert '"FLIGHTSCNRPI"' not in source, f"{name}: stock wordmark came back"
+
+
+def test_portal_loads_av8or_branding_script():
+    html = PORTAL_TEMPLATE.read_text(encoding="utf-8")
+    assert '<script src="/static/av8or.js" defer></script>' in html, "portal: av8or.js tag missing"
+    js = PORTAL_SCRIPT.read_text(encoding="utf-8")
+    assert "Av8oR" in js
+    # CC BY-NC-SA: the upstream credit must survive.
+    assert "github.com/yashmulgaonkar/FlightScnr_Pi" in js
