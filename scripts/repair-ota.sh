@@ -36,7 +36,7 @@
 #
 set -euo pipefail
 
-GITHUB_URL="https://github.com/yashmulgaonkar/FlightScnr_Pi.git"
+GITHUB_URL="https://github.com/mattbaylisFL/av8or.git"
 
 HARD=0
 REPO_ROOT="${FLIGHTSCNR_REPO:-}"
