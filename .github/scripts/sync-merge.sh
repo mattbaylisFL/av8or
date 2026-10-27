@@ -7,6 +7,7 @@
 # Results are written as key=value lines to $GITHUB_OUTPUT (stdout when unset):
 #   status             up_to_date | ready | conflict   (anything else fails the run)
 #   base_sha           tip of the default branch before the merge
+#   upstream_sha       upstream commit that was merged (status=ready)
 #   sha                tip of the staging branch (status=ready)
 #   conflicts          comma-separated conflicting paths (status=conflict)
 #   held_back_workflows  upstream workflow changes that were NOT taken (status=ready)
@@ -94,4 +95,5 @@ fi
 echo "Staged ${sha:0:7} (upstream ${upstream_sha:0:7}, version ${version})."
 emit status ready
 emit sha "$sha"
+emit upstream_sha "$upstream_sha"
 emit held_back_workflows "$held_back"
