@@ -42,7 +42,9 @@ upstream/main ──merge──▶ sync/upstream ──tests vs. baseline──�
 - **Conflict or new test failures:** nothing is published; an issue explains
   what to do. The issue closes itself once a later run succeeds.
 - **Tests:** upstream's suite has ~30 known failures at any given time, so the
-  gate compares against the pre-merge baseline and only blocks *new* failures.
+  gate compares against the pre-merge baseline *and* against pure upstream, and
+  only blocks failures unique to the merge. A test that fails on upstream itself
+  (common for new display-dependent tests) is upstream's problem, not ours.
 - **Upstream workflow changes are never merged.** Our workflows always win.
   Held-back changes are listed in the release notes.
 - GitHub pauses scheduled workflows on a public repo after 60 days without

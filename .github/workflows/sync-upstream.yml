@@ -5,7 +5,8 @@ name: Sync upstream
 #
 #   merge   - merge upstream into a staging branch (no upstream code runs here)
 #   test    - run upstream's tests on the result, read-only token, compared to
-#             the pre-merge baseline (upstream's suite has known failures)
+#             the pre-merge baseline and to pure upstream (upstream's suite has
+#             known failures; only failures unique to the merge block it)
 #   publish - clean merge + no new test failures: fast-forward the default
 #             branch, tag the version and publish a release (the Pi updater
 #             keys off release tags). Otherwise open/refresh an issue.
@@ -42,6 +43,7 @@ jobs:
       status: ${{ steps.merge.outputs.status }}
       sha: ${{ steps.merge.outputs.sha }}
       base_sha: ${{ steps.merge.outputs.base_sha }}
+      upstream_sha: ${{ steps.merge.outputs.upstream_sha }}
       conflicts: ${{ steps.merge.outputs.conflicts }}
       held_back_workflows: ${{ steps.merge.outputs.held_back_workflows }}
     steps:
@@ -74,6 +76,12 @@ jobs:
           ref: ${{ needs.merge.outputs.base_sha }}
           path: base
           persist-credentials: false
+      - name: Checkout pure upstream
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.merge.outputs.upstream_sha }}
+          path: upstream
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11" # matches Raspberry Pi OS Bookworm
@@ -82,7 +90,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r candidate/requirements.txt pytest
       - id: compare
-        run: bash candidate/.github/scripts/compare-tests.sh candidate base
+        run: bash candidate/.github/scripts/compare-tests.sh candidate base upstream
 
   publish:
     needs: [merge, test]
