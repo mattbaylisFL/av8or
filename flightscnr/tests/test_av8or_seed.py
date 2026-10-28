@@ -132,3 +132,14 @@ def test_seed_data_runs_once_per_process(tmp_path):
     (data / "a.json").unlink()
     assert av8or_seed.apply_seed_data(str(data), str(src)) == []
     assert not (data / "a.json").exists()
+
+
+def test_env_example_leaves_home_location_to_the_seed():
+    """install-pi.sh copies .env.example to /etc/flightscnr.env (top priority),
+    so a hard-coded location there would shadow seed.conf on every reset."""
+    env = (ROOT.parent / ".env.example").read_text(encoding="utf-8")
+    values = dict(
+        line.split("=", 1) for line in env.splitlines()
+        if line.startswith(("HOME_LAT=", "HOME_LON="))
+    )
+    assert values == {"HOME_LAT": "", "HOME_LON": ""}
