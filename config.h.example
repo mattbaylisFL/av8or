@@ -40,8 +40,8 @@ TOMORROW_API_KEY =
 
 // Radar center (or set location in the web portal)
 // Default: Orlando International Airport (KMCO / MCO)
-HOME_LAT = 28.429394
-HOME_LON = -81.308994
+HOME_LAT = 28.429399
+HOME_LON = -81.308998
 
 // Flight detail: airline logo when no planespotters photo (True/False)
 SHOW_AIRLINE_LOGOS = False
