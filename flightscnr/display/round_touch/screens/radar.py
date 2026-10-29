@@ -1358,8 +1358,13 @@ def _publish_live_specs() -> None:
 def _prune_live_state(icons: list) -> None:
     keep = {st["id"] for st in icons}
     for table in (_icon_state, _label_state):
-        for key in [k for k in table if k not in keep]:
-            del table[key]
+        # _draw_flights runs on the prewarm worker (outside _layer_lock by
+        # design) and, on first frame / backdrop swap, on the main thread too,
+        # so another thread may insert into these tables mid-walk. dict.copy()
+        # is atomic under the GIL; iterating the live dict raised
+        # "dictionary changed size during iteration" and blanked the display.
+        for key in [k for k in table.copy() if k not in keep]:
+            table.pop(key, None)
 
 
 _SUBPX = 4          # sub-pixel steps per pixel (quarter-pixel positioning)
