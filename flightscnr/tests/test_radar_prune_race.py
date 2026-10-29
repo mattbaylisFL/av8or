@@ -9,7 +9,7 @@
 
 """radar._prune_live_state must tolerate another thread inserting into the
 icon/label state tables (prewarm worker vs. main-thread layer build).
-Seen on a device as "Display error: dictionary changed size during iteration".
+Shows on the device as "Display error: dictionary changed size during iteration".
 """
 
 import sys
