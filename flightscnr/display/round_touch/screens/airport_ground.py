@@ -11,8 +11,9 @@
 
 The radar's closest range and Follow's closest step are both about two miles.
 This screen frames the runway ends for the selected field and does not write
-the saved radar range or center. Satellite imagery is the basemap. OurAirports
-centerlines are drawn on that photo.
+the saved radar range or center. The basemap is Esri satellite, light
+OpenStreetMap, or the dark OpenStreetMap palette, chosen on this screen and
+remembered. OurAirports centerlines are drawn on top.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ _EXTENT_MARGIN = 1.2
 _FALLBACK_RADIUS_KM = 1.2
 _MIN_RADIUS_KM = 0.6
 _MAX_RADIUS_KM = 20.0
-FOOTER_BUTTONS = ("radar",)
+FOOTER_BUTTONS = ("radar", "worldmap")
 _PANEL_BG = (6, 12, 10)
 
 _airport: dict | None = None
@@ -47,6 +48,13 @@ _raster_key: tuple | None = None
 _gen = 0
 _redraw = False
 _lock = threading.Lock()
+_callout_id: str | None = None
+_callout_rect: pygame.Rect | None = None
+
+# Styles that stay bright enough for a light dim veil.
+_LIGHT_DIM_STYLES = (
+    "light", "voyager", "vfr", "seamap", "satellite", "streets", "osm_plain",
+)
 
 
 def campus_view(ident: str, lat: float, lon: float) -> tuple[float, float, float]:
@@ -99,6 +107,7 @@ def close() -> None:
     _airport = None
     _bounds = None
     _radius_km = _FALLBACK_RADIUS_KM
+    clear_callout()
 
 
 def is_open() -> bool:
@@ -129,6 +138,7 @@ def _reset_for_tests() -> None:
     _raster_key = None
     _gen = 0
     _redraw = False
+    clear_callout()
 
 
 def _panel_side() -> int:
@@ -136,8 +146,28 @@ def _panel_side() -> int:
 
 
 def _style() -> str:
-    """Satellite imagery, independent of the radar basemap setting."""
+    """Airport zoom basemap, independent of the radar map style.
+
+    Light OSM is the standard tile color. Dark OSM is the radar remap of
+    those same tiles. Neither one writes the radar's saved map style.
+    """
+    from display.round_touch import settings
+
+    choice = settings.airport_basemap()
+    if choice == "osm_light":
+        return "osm_plain"
+    if choice == "osm_dark":
+        return "osm"
     return "satellite"
+
+
+def toggle_basemap() -> str:
+    """Cycle satellite, OSM light, and OSM dark, then fetch the new raster."""
+    from display.round_touch import settings
+
+    settings.cycle_airport_basemap()
+    _start_fetch()
+    return _style()
 
 
 def _start_fetch() -> None:
@@ -276,6 +306,65 @@ def tap_footer_action(x: int, y: int) -> str | None:
     return nav.curved_footer_hit(x, y, list(FOOTER_BUTTONS))
 
 
+def show_callout(flight: dict) -> None:
+    """Remember the aircraft whose hockey-stick tag should be drawn."""
+    global _callout_id
+    from display.round_touch.screens.radar import _pin_id
+
+    _callout_id = _pin_id(flight)
+
+
+def clear_callout() -> bool:
+    """Hide the hockey stick. True when one was showing."""
+    global _callout_id, _callout_rect
+    shown = _callout_id is not None or _callout_rect is not None
+    _callout_id = None
+    _callout_rect = None
+    return shown
+
+
+def callout_flight(flights) -> dict | None:
+    """The flight the hockey stick belongs to, if it is still on the map."""
+    if not _callout_id:
+        return None
+    from display.round_touch.screens.radar import _pin_id
+
+    for flight in flights or []:
+        if _pin_id(flight) == _callout_id:
+            return flight
+    return None
+
+
+def callout_hit(x: int, y: int) -> bool:
+    """True when the tap lands on the tag text, not the aircraft icon."""
+    if _callout_rect is None:
+        return False
+    pad = theme.s(6)
+    return _callout_rect.inflate(pad, pad).collidepoint(int(x), int(y))
+
+
+def _campus_icon_color(flight) -> tuple:
+    """Icon color for this screen. Light OSM darkens the default yellow."""
+    from display.round_touch.screens.radar import (
+        _LIGHT_MAP_ICON,
+        _LIGHT_MAP_ICON_UNKNOWN,
+        _flight_icon_color,
+    )
+
+    try:
+        color = _flight_icon_color(flight, compact=False)
+    except Exception:
+        color = theme.AIRCRAFT
+    if _style() != "osm_plain":
+        return color
+    key = tuple(int(channel) for channel in color[:3])
+    if key == tuple(theme.AIRCRAFT[:3]):
+        return _LIGHT_MAP_ICON
+    if key == tuple(theme.AIRCRAFT_UNKNOWN[:3]):
+        return _LIGHT_MAP_ICON_UNKNOWN
+    return color
+
+
 def _draw_aircraft(surface: pygame.Surface, flights) -> None:
     for flight in flights or []:
         if not passes_campus_filter(flight):
@@ -288,15 +377,33 @@ def _draw_aircraft(surface: pygame.Surface, flights) -> None:
         if pos is None or not _in_disc(pos[0], pos[1]):
             continue
         heading = geo.screen_heading(flight.get("heading") or 0, facing_deg=0)
-        try:
-            from display.round_touch.screens.radar import _flight_icon_color
-
-            color = _flight_icon_color(flight, compact=False)
-        except Exception:
-            color = theme.AIRCRAFT
         aircraft.draw_plane_icon(
-            surface, pos[0], pos[1], heading, color, flight=flight,
+            surface, pos[0], pos[1], heading, _campus_icon_color(flight), flight=flight,
         )
+
+
+def _draw_callout(surface: pygame.Surface, flights) -> None:
+    """Hockey-stick tag for the aircraft tapped on this screen."""
+    global _callout_rect
+    flight = callout_flight(flights)
+    if flight is None or not passes_campus_filter(flight):
+        _callout_rect = None
+        return
+    lat = flight.get("plane_latitude")
+    lon = flight.get("plane_longitude")
+    if lat is None or lon is None:
+        _callout_rect = None
+        return
+    pos = screen_xy(float(lat), float(lon))
+    if pos is None or not _in_disc(pos[0], pos[1]):
+        _callout_rect = None
+        return
+    from display.round_touch.screens.radar import draw_hockey_stick
+
+    _callout_rect = draw_hockey_stick(
+        surface, int(pos[0]), int(pos[1]), flight,
+        leader_rgb=_campus_icon_color(flight),
+    )
 
 
 def _draw_runways(panel: pygame.Surface) -> None:
@@ -347,7 +454,13 @@ def draw(surface: pygame.Surface, flights) -> None:
         panel.blit(raster, (0, 0))
         style = want[2] if want else ""
         dim = pygame.Surface((side, side), pygame.SRCALPHA)
-        dim_alpha = 40 if style in ("light", "voyager", "vfr", "seamap", "satellite", "streets") else 70
+        # Dark OSM is already the radar palette; a heavy veil would bury roads.
+        # Light OSM stays close to the tile colors so taxiways remain readable.
+        dim_alpha = 18 if style == "osm" else (
+            28 if style == "osm_plain" else (
+                40 if style in _LIGHT_DIM_STYLES else 70
+            )
+        )
         dim.fill((0, 0, 0, dim_alpha))
         panel.blit(dim, (0, 0))
     _draw_runways(panel)
@@ -361,9 +474,21 @@ def draw(surface: pygame.Surface, flights) -> None:
     surface.blit(clipped, rect)
 
     _draw_aircraft(surface, flights)
+    _draw_callout(surface, flights)
 
     label = ident() or tr("common.radar")
-    nav.draw_curved_breadcrumb(
-        surface, [tr("common.radar"), label], with_scrim=True,
-    )
+    nav.draw_curved_breadcrumb(surface, [label], with_scrim=True)
+    _draw_attribution(surface)
     nav.draw_curved_footer(surface, list(FOOTER_BUTTONS))
+
+
+def _draw_attribution(surface: pygame.Surface) -> None:
+    text = (
+        "© OpenStreetMap" if _style() in ("osm", "osm_plain")
+        else "© Esri © Earthstar"
+    )
+    font = draw_mod.load_font(theme.s(8))
+    rendered = font.render(text, True, theme.HINT)
+    y = theme.CENTER_Y + int(theme.VISIBLE_RADIUS * 0.58)
+    x = theme.CENTER_X - int(theme.VISIBLE_RADIUS * 0.62)
+    surface.blit(rendered, (x, y))

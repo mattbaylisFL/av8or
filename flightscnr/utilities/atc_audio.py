@@ -26,7 +26,7 @@ import socket
 import subprocess
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 logger = logging.getLogger("flightscnr.atc")
@@ -971,6 +971,110 @@ def in_quiet_hours(now: datetime | None = None) -> bool:
     return in_quiet_window(minutes, prefs["quiet_start"], prefs["quiet_end"])
 
 
+def quiet_window_end(now: datetime | None = None) -> datetime | None:
+    """Local end of the quiet window that contains ``now``.
+
+    The end minute is exclusive (``[start, end)``), so this is the first
+    minute playback may resume. Overnight windows roll forward a day when
+    that minute is already past.
+    """
+    when = now or datetime.now()
+    if not in_quiet_hours(when):
+        return None
+    end_mins = _parse_hhmm(_prefs()["quiet_end"])
+    if end_mins is None:
+        return None
+    end_dt = when.replace(
+        hour=end_mins // 60,
+        minute=end_mins % 60,
+        second=0,
+        microsecond=0,
+    )
+    if end_dt <= when:
+        end_dt += timedelta(days=1)
+    return end_dt
+
+
+def _parse_override_until(raw: str) -> datetime | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%dT%H:%M")
+    except ValueError:
+        return None
+
+
+def _clear_quiet_override() -> None:
+    global _quiet_override
+    _quiet_override = False
+    try:
+        _settings().set_atc_quiet_override(False)
+    except Exception:
+        logger.debug("ATC quiet override clear failed", exc_info=True)
+
+
+def _grant_quiet_override(now: datetime | None = None) -> None:
+    global _quiet_override
+    end = quiet_window_end(now)
+    if end is None:
+        return
+    _quiet_override = True
+    settings = _settings()
+    settings.set_atc_quiet_override(True)
+    settings.set_atc_quiet_override_until(end.strftime("%Y-%m-%dT%H:%M"))
+
+
+def quiet_override_active(now: datetime | None = None) -> bool:
+    """True only for a one-night grant that is still inside its quiet window.
+
+    A persisted override with no end time, or an end time that has passed,
+    is expired and cleared. ``atc_play_during_quiet`` is a separate switch
+    and is not cleared here.
+    """
+    settings = _settings()
+    try:
+        armed = bool(settings.atc_quiet_override())
+    except Exception:
+        return False
+    if not armed:
+        return False
+    when = now or datetime.now()
+    try:
+        until = _parse_override_until(settings.atc_quiet_override_until())
+    except Exception:
+        until = None
+    if until is None or when >= until or not in_quiet_hours(when):
+        _clear_quiet_override()
+        return False
+    return True
+
+
+def _play_during_quiet() -> bool:
+    try:
+        return bool(_settings().atc_play_during_quiet())
+    except Exception:
+        return False
+
+
+def quiet_override_end_label(*, active: bool | None = None) -> str:
+    """Clock label for the one-night button.
+
+    An active grant shows the saved end. Otherwise it shows the schedule end,
+    which is the time a new press would listen until.
+    """
+    if active is None:
+        active = quiet_override_active()
+    if active:
+        try:
+            until = _parse_override_until(_settings().atc_quiet_override_until())
+        except Exception:
+            until = None
+        if until is not None:
+            return format_hhmm_12h(f"{until.hour:02d}:{until.minute:02d}")
+    return format_hhmm_12h(_prefs()["quiet_end"])
+
+
 def _mpv_alive() -> bool:
     """True if this process owns a live mpv, or another process's mpv IPC responds."""
     global _proc, _playing_mount, _playing_airport, _quiet_override
@@ -1343,9 +1447,13 @@ def _start_locked(
         return status()
 
     quiet = in_quiet_hours()
-    if quiet and not override:
+    always = _play_during_quiet()
+    if quiet and not override and not always:
         with _lock:
-            _last_error = "Quiet hours — enable ATC to override"
+            _last_error = (
+                "Quiet hours — Listen until the window ends, "
+                "or always play during quiet hours"
+            )
         return status()
 
     if shutil.which("mpv") is None:
@@ -1362,9 +1470,11 @@ def _start_locked(
     if not _speaker_ready():
         # Remember intent so plug-in / speaker-watch can start the stream.
         settings.set_atc_want_playing(True)
-        settings.set_atc_quiet_override(bool(quiet and override))
+        if quiet and override:
+            _grant_quiet_override()
+        else:
+            _quiet_override = False
         with _lock:
-            _quiet_override = bool(quiet and override)
             _last_error = "No USB or Bluetooth speaker connected"
         logger.info(
             "ATC deferred — no USB/Bluetooth speaker (airport=%s mount=%s)",
@@ -1447,15 +1557,19 @@ def _start_locked(
         logger.info("ATC duplicate stream race — reaping rivals %s", rivals)
         _kill_pids(rivals)
 
+    granted = bool(quiet and override)
+    if granted:
+        _grant_quiet_override()
     with _lock:
         _proc = proc
         _playing_mount = feed
         _playing_airport = icao
-        _quiet_override = bool(quiet and override)
+        if not granted:
+            _quiet_override = False
         _last_error = None
-    # Persist so app restart / reboot can resume (quiet hours still gated).
+    # Persist so app restart / reboot can resume. A one-night grant stores
+    # its window end; the always-play switch is a separate setting.
     settings.set_atc_want_playing(True)
-    settings.set_atc_quiet_override(bool(quiet and override))
     logger.info(
         "ATC playing %s (%s) volume=%s quiet_override=%s",
         icao,
@@ -1466,14 +1580,16 @@ def _start_locked(
     return status()
 
 
-def apply_enabled(enabled: bool, *, override: bool = True) -> dict:
+def apply_enabled(enabled: bool, *, override: bool = False) -> dict:
     """Single ATC power switch shared by HUD, settings, and the web portal.
 
-    On: persist enabled, set ``atc_want_playing``, and start the stream (quiet
-    hours are overridden by default — same as the old Play button). Idempotent
-    when already playing so Save / preference sync does not retune.
+    On: persist enabled and start when the schedule allows it. Quiet hours
+    block that start unless ``atc_play_during_quiet`` is on or a one-night
+    grant is already active. ``override=True`` is the one-night button.
 
-    Off: clear ``atc_want_playing`` and stop playback (same as the old Stop).
+    Already playing stays up so Save / preference sync does not retune.
+
+    Off: clear ``atc_want_playing`` and stop playback.
     """
     settings = _settings()
     on = bool(enabled)
@@ -1482,17 +1598,63 @@ def apply_enabled(enabled: bool, *, override: bool = True) -> dict:
         settings.set_atc_want_playing(True)
         if is_playing():
             return status()
-        quiet = in_quiet_hours()
-        if quiet and not override:
+        granted = quiet_override_active()
+        allow = bool(override) or granted or _play_during_quiet()
+        if in_quiet_hours() and not allow:
             return status()
-        return start(override=bool(override))
+        return start(override=bool(override) or granted)
     settings.set_atc_enabled(False)
     return stop(clear_override=True)
 
 
-def toggle_power(*, override: bool = True) -> dict:
+def toggle_power(*, override: bool = False) -> dict:
     """Flip ATC enable/disable — HUD long-press and settings switch use this."""
     return apply_enabled(not _settings().atc_enabled(), override=override)
+
+
+def set_quiet_override(enabled: bool) -> dict:
+    """Listen through the rest of this quiet window, or return to the schedule.
+
+    Turning the grant off stops playback and leaves ATC enabled with
+    ``atc_want_playing`` set, so the window end starts the stream again.
+    The always-play switch is left alone; while it is on this is a no-op.
+    """
+    settings = _settings()
+    if _play_during_quiet():
+        return status()
+    if not settings.atc_quiet_hours_enabled() or not in_quiet_hours():
+        return status()
+    if not enabled:
+        _clear_quiet_override()
+        if is_playing():
+            return stop(clear_override=False)
+        return status()
+    settings.set_atc_enabled(True)
+    settings.set_atc_want_playing(True)
+    return start(override=True)
+
+
+def set_play_during_quiet(enabled: bool) -> dict:
+    """Remember whether quiet hours silence ATC, and apply that immediately.
+
+    On: if ATC is enabled and still wanted, start even inside the window.
+    Off: inside the window, stop unless a one-night grant is active. ATC
+    stays enabled and ``atc_want_playing`` stays set.
+    """
+    settings = _settings()
+    settings.set_atc_play_during_quiet(bool(enabled))
+    if enabled:
+        if (
+            settings.atc_enabled()
+            and settings.atc_want_playing()
+            and not is_playing()
+        ):
+            return start(override=False)
+        return status()
+    if in_quiet_hours() and is_playing() and not quiet_override_active():
+        logger.info("ATC stopped — quiet hours apply to audio again")
+        return stop(clear_override=False)
+    return status()
 
 
 def maybe_resume_when_speaker_ready() -> dict:
@@ -1510,15 +1672,15 @@ def maybe_resume_when_speaker_ready() -> dict:
     if not _speaker_ready():
         return status()
     quiet = in_quiet_hours()
-    forced = settings.atc_quiet_override()
-    if quiet and not forced:
+    granted = quiet_override_active()
+    if quiet and not granted and not _play_during_quiet():
         return status()
     logger.info(
         "ATC resuming — speaker ready airport=%s mount=%s",
         settings.atc_airport(),
         settings.atc_mount(),
     )
-    return start(override=bool(forced))
+    return start(override=granted)
 
 
 def reconcile_enabled_state() -> dict:
@@ -1562,8 +1724,8 @@ def maybe_keepalive() -> dict:
     if not settings.atc_airport():
         return status()
     quiet = in_quiet_hours()
-    forced = settings.atc_quiet_override()
-    if quiet and not forced:
+    granted = quiet_override_active()
+    if quiet and not granted and not _play_during_quiet():
         return status()
     if not _speaker_ready(start_watch=False):
         return status()
@@ -1578,7 +1740,7 @@ def maybe_keepalive() -> dict:
         settings.atc_mount(),
         _keepalive_failures,
     )
-    last = start(override=bool(forced))
+    last = start(override=granted)
     if is_playing():
         _keepalive_failures = 0
         _keepalive_next_at = 0.0
@@ -1602,8 +1764,9 @@ def maybe_resume_after_boot(
     so a reboot/service restart restores audio. Retries for a while after boot
     because PipeWire/network/LiveATC are often not ready on the first try.
 
-    Honors quiet hours unless the user previously forced playback (quiet override).
-    Skips mpv entirely when no USB/Bluetooth speaker is present (watch resumes later).
+    Honors quiet hours unless a one-night grant is still inside its window or
+    quiet hours are set not to silence ATC. Skips mpv entirely when no
+    USB/Bluetooth speaker is present (watch resumes later).
     """
     global _last_error
 
@@ -1622,9 +1785,9 @@ def maybe_resume_after_boot(
         return status()
 
     quiet = in_quiet_hours()
-    forced = settings.atc_quiet_override()
-    if quiet and not forced:
-        logger.info("ATC resume skipped — quiet hours (no override)")
+    granted = quiet_override_active()
+    if quiet and not granted and not _play_during_quiet():
+        logger.info("ATC resume skipped — quiet hours")
         return status()
 
     if not _speaker_ready():
@@ -1641,7 +1804,7 @@ def maybe_resume_after_boot(
         "ATC resuming after boot airport=%s mount=%s override=%s (up to %s attempts)",
         settings.atc_airport(),
         settings.atc_mount(),
-        forced,
+        granted,
         max_attempts,
     )
 
@@ -1652,12 +1815,16 @@ def maybe_resume_after_boot(
         if is_playing():
             return status()
         # Re-check quiet hours each attempt (window may have started mid-retry).
-        if in_quiet_hours() and not settings.atc_quiet_override():
+        if (
+            in_quiet_hours()
+            and not quiet_override_active()
+            and not _play_during_quiet()
+        ):
             logger.info("ATC resume stopped — entered quiet hours")
             return status()
         if not settings.atc_want_playing() or not settings.atc_enabled():
             return status()
-        last = start(override=bool(forced or settings.atc_quiet_override()))
+        last = start(override=quiet_override_active())
         if is_playing():
             logger.info("ATC resumed on attempt %s/%s", attempt, attempts)
             return last
@@ -1680,10 +1847,12 @@ _last_quiet_check = 0.0
 def enforce_quiet_hours() -> None:
     """Apply the quiet window to a LIVE stream, not just new starts.
 
-    Called periodically from the display loop: stops playback once the
-    quiet window begins (unless overridden) and resumes it when the
-    window ends if the user still wants ATC playing. The lofi bed
-    follows is_playing(), so it obeys automatically.
+    Called periodically from the display loop. A one-night grant keeps
+    the stream up until its saved end. ``atc_play_during_quiet`` means the
+    schedule never silences ATC. Otherwise playback stops when the window
+    begins and resumes when it ends if ATC is still wanted. A stuck
+    override with no end time is cleared here. The lofi bed follows
+    is_playing(), so it obeys automatically.
     """
     global _last_quiet_check
     now_mono = time.monotonic()
@@ -1693,9 +1862,19 @@ def enforce_quiet_hours() -> None:
     try:
         from display.round_touch import settings
 
+        active = quiet_override_active()
         if not settings.atc_quiet_hours_enabled():
             return
-        if settings.atc_quiet_override():
+        if _play_during_quiet():
+            if (
+                settings.atc_want_playing()
+                and settings.atc_enabled()
+                and not is_playing()
+            ):
+                logger.info("ATC resuming — quiet hours do not silence audio")
+                start(override=False)
+            return
+        if active:
             return
         if in_quiet_hours():
             if is_playing():
@@ -1722,8 +1901,9 @@ def retune_if_playing(
 
     Used when the user changes airport or channel without pressing Play again.
     Prefers IPC ``loadfile`` so playback does not go silent during the switch.
-    Falls back to stop/start only when loadfile is unavailable. Always uses
-    ``override=True`` so quiet hours don't kill a retune.
+    Falls back to stop/start only when loadfile is unavailable. The fallback
+    keeps an existing one-night grant and does not create one. Always-play
+    still allows the restart during quiet hours.
     """
     global _playing_mount, _playing_airport, _last_error
 
@@ -1773,7 +1953,7 @@ def retune_if_playing(
             return status()
         logger.info("ATC loadfile left mpv idle — falling back to start()")
 
-    return start(airport=icao, mount=feed, override=True)
+    return start(airport=icao, mount=feed, override=quiet_override_active())
 
 
 def on_radar_center_changed() -> dict:
@@ -1837,7 +2017,7 @@ def on_radar_center_changed() -> dict:
                 return retune_if_playing(airport=nxt, mount=mount)
             # Was enabled + want_playing but not currently streaming (e.g. after
             # a failed start / speaker blip) — start Tower at the new home.
-            return start(airport=nxt, mount=mount, override=True)
+            return start(airport=nxt, mount=mount, override=quiet_override_active())
         if playing:
             return stop()
     return status()
@@ -1877,22 +2057,18 @@ def _prefetch_visible_feeds_worker() -> None:
 
 def status() -> dict:
     prefs = _prefs()
+    active = quiet_override_active()
+    always = _play_during_quiet()
     with _lock:
         playing = _mpv_alive()
         playing_airport = _playing_airport if playing else None
         playing_mount = _playing_mount if playing else None
         quiet = in_quiet_hours()
-        override_flag = _quiet_override
     if playing and (not playing_airport or not playing_mount):
         ipc_airport, ipc_mount = _playing_from_ipc()
         playing_airport = playing_airport or ipc_airport or prefs["airport"] or None
         playing_mount = playing_mount or ipc_mount or prefs["mount"] or None
-    try:
-        persisted_override = bool(_settings().atc_quiet_override())
-    except Exception:
-        persisted_override = False
-    override = bool((override_flag or persisted_override) and playing and quiet)
-    if quiet and override:
+    if quiet and active and playing and not always:
         state = "Playing (quiet override)"
     elif playing:
         state = "Playing"
@@ -1920,7 +2096,9 @@ def status() -> dict:
         "quiet_start_label": format_hhmm_12h(prefs["quiet_start"]),
         "quiet_end_label": format_hhmm_12h(prefs["quiet_end"]),
         "in_quiet_hours": quiet,
-        "quiet_override": override,
+        "quiet_override": active,
+        "play_during_quiet": always,
+        "quiet_override_end_label": quiet_override_end_label(active=active),
         "want_playing": _settings().atc_want_playing(),
         "state": state,
         "error": _last_error,

@@ -12,6 +12,7 @@
 import os
 import sys
 import tempfile
+from datetime import datetime
 
 import pytest
 
@@ -31,6 +32,7 @@ def _fresh(monkeypatch):
     monkeypatch.setattr(atc_audio, "_last_quiet_check", 0.0)
     settings.set_atc_quiet_hours_enabled(True)
     settings.set_atc_quiet_override(False)
+    settings.set_atc_play_during_quiet(False)
     yield
     settings.set_atc_quiet_hours_enabled(False)
 
@@ -61,9 +63,38 @@ class TestQuietEnforcement:
     def test_override_keeps_playing(self, monkeypatch):
         calls = _spy(monkeypatch, playing=True, quiet=True)
         settings.set_atc_quiet_override(True)
+        settings.set_atc_quiet_override_until("2999-01-01T00:00")
         atc_audio.enforce_quiet_hours()
         assert calls["stop"] == 0
-        settings.set_atc_quiet_override(False)
+        assert settings.atc_quiet_override() is True
+
+    def test_stuck_override_without_expiry_stops(self, monkeypatch):
+        calls = _spy(monkeypatch, playing=True, quiet=True)
+        settings.set_atc_quiet_override(True)
+        atc_audio.enforce_quiet_hours()
+        assert calls["stop"] == 1
+        assert settings.atc_quiet_override() is False
+
+    def test_expired_override_stops(self, monkeypatch):
+        calls = _spy(monkeypatch, playing=True, quiet=True)
+        settings.set_atc_quiet_override(True)
+        settings.set_atc_quiet_override_until("2000-01-01T00:00")
+        atc_audio.enforce_quiet_hours()
+        assert calls["stop"] == 1
+        assert settings.atc_quiet_override() is False
+
+    def test_always_play_keeps_the_stream_through_quiet_hours(self, monkeypatch):
+        calls = _spy(monkeypatch, playing=True, quiet=True)
+        settings.set_atc_play_during_quiet(True)
+        atc_audio.enforce_quiet_hours()
+        assert calls["stop"] == 0
+
+    def test_always_play_resumes_inside_quiet_hours(self, monkeypatch):
+        calls = _spy(monkeypatch, playing=False, quiet=True, want=True)
+        settings.set_atc_play_during_quiet(True)
+        atc_audio.enforce_quiet_hours()
+        assert calls["start"] == 1
+        assert settings.atc_quiet_override() is False
 
     def test_resumes_when_window_ends(self, monkeypatch):
         calls = _spy(monkeypatch, playing=False, quiet=False, want=True)
@@ -87,3 +118,53 @@ class TestQuietEnforcement:
         atc_audio.enforce_quiet_hours()
         atc_audio.enforce_quiet_hours()
         assert calls["stop"] == 1
+
+    def test_window_end_rolls_overnight(self):
+        settings.set_atc_quiet_start("22:00")
+        settings.set_atc_quiet_end("09:00")
+        assert atc_audio.quiet_window_end(datetime(2026, 10, 30, 0, 30)) == datetime(
+            2026, 10, 30, 9, 0
+        )
+        assert atc_audio.quiet_window_end(datetime(2026, 10, 29, 23, 0)) == datetime(
+            2026, 10, 30, 9, 0
+        )
+        assert atc_audio.quiet_window_end(datetime(2026, 10, 30, 12, 0)) is None
+
+    def test_listen_off_stops_without_clearing_want(self, monkeypatch):
+        settings.set_atc_enabled(True)
+        settings.set_atc_want_playing(True)
+        settings.set_atc_quiet_override(True)
+        settings.set_atc_quiet_override_until("2999-01-01T00:00")
+        monkeypatch.setattr(atc_audio, "in_quiet_hours", lambda now=None: True)
+        monkeypatch.setattr(atc_audio, "is_playing", lambda: True)
+        stopped = {}
+
+        def _stop(*, clear_override=True):
+            stopped["clear"] = clear_override
+            return {"playing": False}
+
+        monkeypatch.setattr(atc_audio, "stop", _stop)
+        atc_audio.set_quiet_override(False)
+        assert stopped["clear"] is False
+        assert settings.atc_want_playing() is True
+        assert settings.atc_enabled() is True
+        assert settings.atc_quiet_override() is False
+
+    def test_always_off_stops_without_clearing_want(self, monkeypatch):
+        settings.set_atc_enabled(True)
+        settings.set_atc_want_playing(True)
+        settings.set_atc_play_during_quiet(True)
+        monkeypatch.setattr(atc_audio, "in_quiet_hours", lambda now=None: True)
+        monkeypatch.setattr(atc_audio, "is_playing", lambda: True)
+        stopped = {}
+
+        def _stop(*, clear_override=True):
+            stopped["clear"] = clear_override
+            return {"playing": False}
+
+        monkeypatch.setattr(atc_audio, "stop", _stop)
+        atc_audio.set_play_during_quiet(False)
+        assert stopped["clear"] is False
+        assert settings.atc_want_playing() is True
+        assert settings.atc_enabled() is True
+        assert settings.atc_play_during_quiet() is False

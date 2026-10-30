@@ -723,7 +723,9 @@ def draw_lines_scrolled(
 
 from display.round_touch import arc_ui  # noqa: E402  (kept near its users)
 
-_CURVED_FOOTER_ORDER = ("pin", "prev", "radar", "back", "next", "board_id", "astronaut")  # screen left → right
+_CURVED_FOOTER_ORDER = (
+    "pin", "prev", "worldmap", "radar", "back", "next", "board_id", "astronaut",
+)  # screen left → right
 
 
 def __getattr__(name: str):
@@ -790,6 +792,16 @@ def curved_footer_segments(kinds: list[str]) -> list[tuple[str, float, float]]:
                     kind,
                     bottom + offset + side_half + pin_half + gap * 3.0,
                     pin_half,
+                )
+            )
+        elif kind == "worldmap":
+            # Airport basemap switch: tucked against the radar, screen-left.
+            id_half = side_half * 0.42
+            out.append(
+                (
+                    kind,
+                    bottom + radar_half + gap + id_half,
+                    id_half,
                 )
             )
         elif kind in ("board_id", "astronaut"):
@@ -964,13 +976,15 @@ def _draw_curved_footer_uncached(
             if label is not None:
                 surface.blit(label, label.get_rect(center=(px, py)))
             continue
-        if kind == "astronaut":
+        if kind in ("astronaut", "worldmap"):
             px = cx + int(round(r * math.cos(mid)))
             py = cy + int(round(r * math.sin(mid)))
             # The crew list is open: this same pill returns to the world map.
+            # The airport screen uses that world-map glyph as its basemap switch.
+            show_map = kind == "worldmap" or crew_open
             icon = _silhouette_glyph(
-                _WORLDMAP_PATH if crew_open else _ASTRONAUT_PATH,
-                theme.s(22 if crew_open else 18),
+                _WORLDMAP_PATH if show_map else _ASTRONAUT_PATH,
+                theme.s(22 if show_map else 18),
                 glyph_color,
             )
             if icon is not None:
@@ -1143,6 +1157,33 @@ def tap_breadcrumb_curved(x: int, y: int) -> bool:
         r_inner=theme.VISIBLE_RADIUS * 0.80,
         r_outer=theme.VISIBLE_RADIUS + theme.s(6),
         mid=-math.pi / 2, half_span=1.1,
+    )
+
+
+def curved_breadcrumb_pill_span(parts: list[str]) -> tuple[int, float, int]:
+    """(radius, half-angle, thickness) of the drawn breadcrumb pill."""
+    items, r = _curved_breadcrumb_items(parts)
+    if not items:
+        return r, 0.0, 0
+    half = arc_ui.arc_span([it.get_width() for it in items], r) / 2
+    pad = theme.s(12) / max(1, r)
+    band = max(it.get_height() for it in items) + theme.s(10)
+    return r, half + pad, band
+
+
+def tap_curved_breadcrumb_pill(x: int, y: int, parts: list[str]) -> bool:
+    """Hit the drawn pill only. The wide rim band stays for other screens."""
+    r, half, band = curved_breadcrumb_pill_span(parts)
+    if half <= 0 or band <= 0:
+        return False
+    slack = theme.s(4)
+    return arc_ui.arc_band_hit(
+        x, y,
+        cx=theme.CENTER_X, cy=theme.CENTER_Y,
+        r_inner=r - band / 2 - slack,
+        r_outer=r + band / 2 + slack,
+        mid=-math.pi / 2,
+        half_span=half,
     )
 
 

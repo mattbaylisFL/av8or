@@ -876,7 +876,7 @@
     <details class="card atc-card">
         <summary><span class="ico">&#9835;</span><span data-i18n="portal.section.atc.title">ATC Audio</span><span class="sum" data-i18n="portal.section.atc.summary">LiveATC</span><span class="chev">&#9656;</span></summary>
         <div class="body">
-            <p class="hint">Manual LiveATC stream to the Pi’s USB or Bluetooth speaker via <code>mpv</code> (<code>sudo apt install mpv</code>). Pair a Bluetooth speaker in the card below. Airport lists every large/medium field in radar range. Channel loads local seed/index immediately, then auto-fetches the full LiveATC feed list in the background (Cloudflare-bypass search). Enable ATC audio to start playback; disable to stop. Changing airport or moving the map while ATC is enabled selects that area’s Tower and keeps playing. Playback resumes after reboot/app restart when it was left enabled. Quiet hours block auto-resume after reboot; turning ATC on again overrides quiet hours until you disable it.</p>
+            <p class="hint">Manual LiveATC stream to the Pi’s USB or Bluetooth speaker via <code>mpv</code> (<code>sudo apt install mpv</code>). Pair a Bluetooth speaker in the card below. Airport lists every large/medium field in radar range. Channel loads local seed/index immediately, then auto-fetches the full LiveATC feed list in the background (Cloudflare-bypass search). Enable ATC audio to start playback; disable to stop. Changing airport or moving the map while ATC is enabled selects that area’s Tower and keeps playing. Playback resumes after reboot/app restart when it was left enabled. Quiet hours stop playback on schedule and block auto-resume. Listen until the quiet window ends for one night, or turn on Always play during quiet hours to keep ATC on through every quiet window.</p>
             <div class="chk">
                 <label for="atc_enabled">Enable ATC audio</label>
                 <span class="switch"><input id="atc_enabled" type="checkbox"><span class="track"></span></span>
@@ -887,6 +887,10 @@
             <div class="chk">
                 <label for="atc_quiet_enabled">Quiet hours</label>
                 <span class="switch"><input id="atc_quiet_enabled" type="checkbox"><span class="track"></span></span>
+            </div>
+            <div class="chk">
+                <label for="atc_play_during_quiet" data-i18n="portal.atc.quiet_always.label">Always play during quiet hours</label>
+                <span class="switch"><input id="atc_play_during_quiet" type="checkbox"><span class="track"></span></span>
             </div>
             <div class="track-row" style="flex-wrap:wrap;gap:.5rem">
                 <label>Start
@@ -911,7 +915,8 @@
                 <select id="atc_channel"></select>
             </label>
             <p class="hint" id="atc_status_line">Status: —</p>
-            <div class="track-row" style="margin-top:.55rem">
+            <div class="track-row" style="margin-top:.55rem;flex-wrap:wrap;gap:.5rem">
+                <button class="btn" id="btn-atc-quiet-override" type="button" hidden></button>
                 <button class="btn btn-primary" id="btn-atc-save" type="button">Save</button>
             </div>
             <div id="atc-status" class="status"></div>
@@ -3289,6 +3294,18 @@ function renderAtcStatus(st) {
     if (st.error) line += ` — ${st.error}`;
     if (st.playing_mount) line += ` (${st.playing_airport || ""} ${st.playing_mount})`;
     $("atc_status_line").textContent = line;
+    const overrideBtn = $("btn-atc-quiet-override");
+    if (overrideBtn) {
+        const show = !!st.in_quiet_hours && !st.play_during_quiet;
+        overrideBtn.hidden = !show;
+        if (show) {
+            const end = st.quiet_override_end_label || st.quiet_end_label || "";
+            overrideBtn.dataset.on = st.quiet_override ? "1" : "0";
+            overrideBtn.textContent = st.quiet_override
+                ? i18nText("portal.atc.quiet_override.back", "Back to quiet hours")
+                : i18nFormat("portal.atc.quiet_override.listen", "Listen until {end}", { end });
+        }
+    }
 }
 
 function _fillAtcChannelOptions(sel, channels, selectedMount) {
@@ -3376,6 +3393,9 @@ async function loadAtc() {
     $("atc_volume").value = String(st.volume ?? 100);
     syncAtcVolLabel();
     $("atc_quiet_enabled").checked = st.quiet_hours_enabled !== false;
+    if ($("atc_play_during_quiet")) {
+        $("atc_play_during_quiet").checked = !!st.play_during_quiet;
+    }
     setQuiet12("atc_quiet_start", st.quiet_start || "22:00");
     setQuiet12("atc_quiet_end", st.quiet_end || "06:00");
     renderAtcStatus(st);
@@ -3416,6 +3436,7 @@ function atcPrefsPayload(extra) {
         mount: $("atc_channel").value || "",
         volume: Number($("atc_volume").value || 100),
         quiet_hours_enabled: !!$("atc_quiet_enabled").checked,
+        play_during_quiet: !!($("atc_play_during_quiet") && $("atc_play_during_quiet").checked),
         quiet_start: quiet12ToHhmm("atc_quiet_start"),
         quiet_end: quiet12ToHhmm("atc_quiet_end"),
         ...(extra || {}),
@@ -3955,6 +3976,24 @@ if ($("atc_channel")) {
     $("atc_channel").addEventListener("change", () => saveAtc());
 }
 if ($("btn-atc-save")) $("btn-atc-save").addEventListener("click", () => saveAtc());
+if ($("btn-atc-quiet-override")) {
+    $("btn-atc-quiet-override").addEventListener("click", async () => {
+        const btn = $("btn-atc-quiet-override");
+        clearStatus("atc-status");
+        try {
+            const data = await jsonFetch("/atc/quiet-override", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ enabled: btn.dataset.on !== "1" }),
+            });
+            if ($("atc_enabled")) $("atc_enabled").checked = !!data.enabled;
+            renderAtcStatus(data);
+            if (data.error) showStatus("atc-status", data.error, true);
+        } catch (e) {
+            showStatus("atc-status", e.message, true);
+        }
+    });
+}
 if ($("atc_enabled")) $("atc_enabled").addEventListener("change", () => saveAtc());
 
 function renderBluetoothStatus(st) {

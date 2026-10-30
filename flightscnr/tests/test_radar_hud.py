@@ -832,13 +832,13 @@ class HudSettingsRowTests(unittest.TestCase):
             (info.HUD_ACTIONS, info._hud_row_labels()),
             # layers_actions() drops rows whose parent feature is off.
             (info.layers_actions(), info._layers_row_labels()),
-            (info.ATC_QUIET_ACTIONS, info._atc_quiet_row_labels()),
+            (info.atc_quiet_actions(), info._atc_quiet_row_labels()),
         )
         for actions, labels in pages:
             self.assertEqual(len(actions), len(labels))
             for action, label in zip(actions, labels):
                 if action in info._TOGGLE_ROW_STATE:
-                    self.assertNotIn(":", label)
+                    self.assertNotIn(": ", label)
                     self.assertTrue(callable(info._TOGGLE_ROW_STATE[action]))
 
     def test_switch_knob_ignores_the_user_palette(self):

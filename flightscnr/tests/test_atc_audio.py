@@ -444,7 +444,27 @@ class PlayerTests(unittest.TestCase):
         self.settings.atc_quiet_start.return_value = "22:00"
         self.settings.atc_quiet_end.return_value = "06:00"
         self.settings.atc_want_playing.return_value = False
-        self.settings.atc_quiet_override.return_value = False
+        self._override = {"on": False, "until": ""}
+
+        def _override_on():
+            return self._override["on"]
+
+        def _set_override(enabled, persist=True):
+            self._override["on"] = bool(enabled)
+            if not enabled:
+                self._override["until"] = ""
+
+        def _until():
+            return self._override["until"]
+
+        def _set_until(value, persist=True):
+            self._override["until"] = str(value or "")
+
+        self.settings.atc_quiet_override.side_effect = _override_on
+        self.settings.set_atc_quiet_override.side_effect = _set_override
+        self.settings.atc_quiet_override_until.side_effect = _until
+        self.settings.set_atc_quiet_override_until.side_effect = _set_until
+        self.settings.atc_play_during_quiet.return_value = False
         self.settings.set_atc_volume.side_effect = lambda v, persist=True: max(
             0, min(100, int(v))
         )
@@ -501,6 +521,33 @@ class PlayerTests(unittest.TestCase):
         args = popen.call_args[0][0]
         self.assertEqual(args[0], "mpv")
         self.assertIn("https://d.liveatc.net/ksfo_twr", args)
+        self.assertTrue(self._override["on"])
+        self.assertRegex(self._override["until"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
+
+    def test_apply_enabled_during_quiet_does_not_start(self):
+        from utilities import atc_audio
+
+        with mock.patch.object(atc_audio, "in_quiet_hours", return_value=True), mock.patch(
+            "utilities.atc_audio.subprocess.Popen"
+        ) as popen:
+            st = atc_audio.apply_enabled(True)
+        self.assertFalse(st["playing"])
+        popen.assert_not_called()
+        self.assertFalse(self._override["on"])
+        self.settings.set_atc_want_playing.assert_called_with(True)
+
+    def test_always_play_starts_during_quiet_without_one_night_grant(self):
+        from utilities import atc_audio
+
+        self.settings.atc_play_during_quiet.return_value = True
+        proc = self._fake_proc()
+        with mock.patch.object(atc_audio, "in_quiet_hours", return_value=True), mock.patch(
+            "utilities.atc_audio.subprocess.Popen", return_value=proc
+        ), mock.patch("utilities.atc_audio.time.sleep"):
+            st = atc_audio.apply_enabled(True)
+        self.assertTrue(st["playing"])
+        self.assertFalse(self._override["on"])
+        self.assertFalse(st["quiet_override"])
 
     def test_disabled_stops_and_refuses_start(self):
         from utilities import atc_audio
@@ -605,7 +652,7 @@ class PlayerTests(unittest.TestCase):
             atc_audio, "apply_enabled", return_value={"playing": True}
         ) as apply:
             atc_audio.toggle_power()
-        apply.assert_called_once_with(True, override=True)
+        apply.assert_called_once_with(True, override=False)
 
     def test_stop_kills_process_group(self):
         from utilities import atc_audio
@@ -968,7 +1015,8 @@ class PlayerTests(unittest.TestCase):
         from utilities import atc_audio
 
         self.settings.atc_want_playing.return_value = True
-        self.settings.atc_quiet_override.return_value = True
+        self._override["on"] = True
+        self._override["until"] = "2999-01-01T00:00"
         proc = self._fake_proc()
         with mock.patch.object(atc_audio, "in_quiet_hours", return_value=True), mock.patch(
             "utilities.atc_audio.subprocess.Popen", return_value=proc

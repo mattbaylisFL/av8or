@@ -165,13 +165,25 @@ def atc_actions() -> tuple[str, ...]:
 
 
 # LiveATC quiet hours — page 2 (no scroll).
+# quiet_override is inserted by atc_quiet_actions() only while the window
+# is in effect and the always-play switch is off.
 ATC_QUIET_ACTIONS = (
     "quiet",
     "quiet_start",
     "quiet_end",
+    "quiet_always",
     "quiet_dim",
     "quiet_dim_level",
 )
+
+
+def atc_quiet_actions() -> tuple[str, ...]:
+    from utilities import atc_audio
+
+    actions = list(ATC_QUIET_ACTIONS)
+    if atc_audio.in_quiet_hours() and not settings.atc_play_during_quiet():
+        actions.insert(actions.index("quiet_always") + 1, "quiet_override")
+    return tuple(actions)
 # Power / service controls (portal System section equivalent).
 SYSTEM_ACTIONS = (
     "wifi_setup",
@@ -2116,7 +2128,7 @@ def _row_actions(page: int) -> tuple[str, ...]:
     if page == PAGE_ATC:
         return atc_actions()
     if page == PAGE_ATC_QUIET:
-        return ATC_QUIET_ACTIONS
+        return atc_quiet_actions()
     if page == PAGE_TARGETS:
         return TARGETS_ACTIONS
     return ()
@@ -2720,7 +2732,7 @@ def lofi_volume_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
 
 def quiet_dim_row_index() -> int:
     try:
-        return ATC_QUIET_ACTIONS.index("quiet_dim_level")
+        return atc_quiet_actions().index("quiet_dim_level")
     except ValueError:
         return -1
 
@@ -2944,13 +2956,24 @@ def _atc_row_labels() -> list[str]:
 
 
 def _atc_quiet_row_labels() -> list[str]:
-    return [
+    from utilities import atc_audio
+
+    rows = [
         tr("settings.atc.quiet_hours"),
         tr("settings.atc.quiet_start_row", value=settings.atc_quiet_start_label()),
         tr("settings.atc.quiet_end_row", value=settings.atc_quiet_end_label()),
-        tr("settings.atc.dim_quiet"),
-        "",  # quiet dim level slider
+        tr("settings.atc.quiet_always"),
     ]
+    if atc_audio.in_quiet_hours() and not settings.atc_play_during_quiet():
+        rows.append(
+            tr(
+                "settings.atc.quiet_override",
+                end=atc_audio.quiet_override_end_label(),
+            )
+        )
+    rows.append(tr("settings.atc.dim_quiet"))
+    rows.append("")  # quiet dim level slider
+    return rows
 
 
 def _draw_lofi_volume_slider_row(surface, ry: int, focused: bool) -> None:
@@ -3120,6 +3143,12 @@ def _layers_row_labels() -> list[str]:
 
 # Rows drawn as "label + pill switch". The whole row stays tappable, so the
 # switch is a state readout rather than a separate hit target.
+def _quiet_override_switch() -> bool:
+    from utilities import atc_audio
+
+    return atc_audio.quiet_override_active()
+
+
 _TOGGLE_ROW_STATE = {
     "compass": settings.show_compass_rose,
     "range_rings": settings.show_range_rings,
@@ -3147,6 +3176,8 @@ _TOGGLE_ROW_STATE = {
     "lofi_controls": settings.lofi_controls_enabled,
     "lofi_title_scroll": settings.lofi_title_scroll,
     "quiet": settings.atc_quiet_hours_enabled,
+    "quiet_always": settings.atc_play_during_quiet,
+    "quiet_override": _quiet_override_switch,
     "quiet_dim": settings.quiet_dim_enabled,
 }
 
@@ -3676,7 +3707,7 @@ def draw_info(
             display_focus,
             top,
             bottom,
-            actions=ATC_QUIET_ACTIONS,
+            actions=atc_quiet_actions(),
             draw_quiet_dim_slider=True,
         )
 

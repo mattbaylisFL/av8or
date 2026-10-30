@@ -188,6 +188,9 @@ def normalize_map_style(raw: str | None) -> str:
         return "seamap"
     if provider in ("osm", "openstreetmap"):
         return "osm"
+    # Airport zoom only: standard OSM colors, not the dark radar remap.
+    if provider in ("osm_plain", "airport_osm"):
+        return "osm_plain"
     logger.warning("Unknown map style %r — using dark", raw)
     return "dark"
 
@@ -309,12 +312,14 @@ def _tile_url(z: int, x: int, y: int, style: str | None = None) -> str:
         from display.round_touch.seamap_tiles import SEAMAP_PBF_URL
 
         return SEAMAP_PBF_URL.format(z=z, x=x, y=y)
+    if style == "osm_plain":
+        return OSM_TILE_URL.format(z=z, x=x, y=y)
     return OSM_TILE_URL.format(z=z, x=x, y=y)
 
 
 def _tile_workers(style: str | None = None) -> int:
     style = normalize_map_style(style) if style else _resolved_style()
-    if style == "osm":
+    if style in ("osm", "osm_plain"):
         return OSM_TILE_WORKERS
     if style == "vfr":
         return VFR_TILE_WORKERS
@@ -513,7 +518,7 @@ def _fetch_tile_coords(
     def _download(tx: int, ty: int) -> tuple[int, int, pygame.Surface | None]:
         session = requests.Session()
         session.headers["User-Agent"] = USER_AGENT
-        if style == "osm":
+        if style in ("osm", "osm_plain"):
             time.sleep(OSM_TILE_DELAY_S)
         return tx, ty, _fetch_tile(zoom, tx, ty, session, style)
 
@@ -856,6 +861,8 @@ def _style_for_radar(surface: pygame.Surface, style: str | None = None) -> pygam
     if style == "vfr":
         return _style_vfr(surface)
     if style == "seamap":
+        return _as_display_surface(surface)
+    if style == "osm_plain":
         return _as_display_surface(surface)
     return _style_osm(surface)
 

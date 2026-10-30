@@ -67,24 +67,51 @@ class TestPickAirportAt(unittest.TestCase):
         self.assertIsNotNone(d2)
         self.assertLess(d2, theme.s(32) ** 2)
 
-    def test_icons_off_returns_none(self):
+    def test_hidden_pins_are_still_pickable(self):
         from display.round_touch import airport_overlay, theme
 
-        airport_overlay._airports = [
-            {
-                "ident": "KSFO",
-                "lat": 37.62,
-                "lon": -122.38,
-                "name": "San Francisco",
-                "type": "large_airport",
-            }
-        ]
-        with mock.patch.object(airport_overlay, "_icons_on", return_value=False):
+        ksfo = {
+            "ident": "KSFO",
+            "lat": 37.62,
+            "lon": -122.38,
+            "name": "San Francisco",
+            "type": "large_airport",
+        }
+        with mock.patch.object(
+            airport_overlay, "_icons_on", return_value=False
+        ), mock.patch.object(
+            airport_overlay, "_ensure_cached", return_value=([ksfo], [])
+        ), mock.patch.object(
+            airport_overlay,
+            "_screen_xy",
+            return_value=(theme.CENTER_X, theme.CENTER_Y),
+        ):
             picked, d2 = airport_overlay.pick_airport_at(
                 theme.CENTER_X, theme.CENTER_Y
             )
-        self.assertIsNone(picked)
-        self.assertIsNone(d2)
+            near = airport_overlay.airports_near(
+                theme.CENTER_X, theme.CENTER_Y, theme.s(32)
+            )
+        self.assertIsNotNone(picked)
+        self.assertEqual(picked["ident"], "KSFO")
+        self.assertIsNotNone(d2)
+        self.assertEqual(near[0][0]["ident"], "KSFO")
+
+    def test_hidden_pins_are_not_drawn(self):
+        from display.round_touch import airport_overlay
+
+        with mock.patch.object(
+            airport_overlay, "_icons_on", return_value=False
+        ), mock.patch.object(
+            airport_overlay, "_runways_allowed", return_value=False
+        ), mock.patch.object(
+            airport_overlay, "_ensure_cached", return_value=([{"ident": "KSFO"}], [])
+        ) as ensure, mock.patch.object(
+            airport_overlay, "_draw_marker"
+        ) as marker:
+            airport_overlay.draw_airports(mock.Mock())
+        ensure.assert_called_once()
+        marker.assert_not_called()
 
     def test_callout_lines_include_iata_when_three_letter(self):
         from display.round_touch import airport_overlay
