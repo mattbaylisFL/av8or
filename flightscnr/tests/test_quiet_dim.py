@@ -118,8 +118,9 @@ class TestQuietDimRows:
             "quiet_dim_level"
         )
         labels = info._atc_quiet_row_labels()
-        assert len(labels) == len(info.ATC_QUIET_ACTIONS)
+        assert len(labels) == len(info.atc_quiet_actions())
         assert "Dim During Quiet Hours" in labels
+        assert "Always play during quiet hours" in labels
 
     def test_slider_hit_and_value(self):
         # The dim row sits low on the page — scroll it into the body band.

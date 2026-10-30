@@ -1027,9 +1027,9 @@ def _blit_tag_at(surface, x, y, rows, rect, on_right, leader_rgb, blips, placed)
     return rect
 
 
-def _vessel_tag_lines(flight):
+def _vessel_tag_lines(flight, *, force: bool = False):
     """(lines, block_h) for a vessel, or None when it should not be labelled."""
-    if not settings.show_marine_labels():
+    if not force and not settings.show_marine_labels():
         return None
     if not vessel_declutter.should_label(flight):
         return None
@@ -1066,9 +1066,9 @@ def _flight_number_tag_color() -> tuple[int, int, int]:
     return tuple(theme.TAG_TEXT_DARK[:3])
 
 
-def _aircraft_tag_lines(flight):
+def _aircraft_tag_lines(flight, *, force: bool = False):
     """(lines, block_h) for an aircraft, or None when it should not be labelled."""
-    if not settings.show_aircraft_labels():
+    if not force and not settings.show_aircraft_labels():
         return None
 
     block_h, offsets, main_font, sub_font = _tag_block_metrics()
@@ -1132,6 +1132,50 @@ def _draw_aircraft_tag(
         blips,
         leader_rgb=_flight_icon_color(flight, compact=False),
     )
+
+
+def draw_hockey_stick(
+    surface,
+    x: int,
+    y: int,
+    flight,
+    *,
+    leader_rgb: tuple | None = None,
+) -> pygame.Rect | None:
+    """One callsign tag and its leader, ignoring the radar label switches.
+
+    The airport zoom uses this as a tap target. The returned rect is the text
+    block, not the stem, so a tap on the icon itself stays an icon tap.
+    """
+    if flight.get("kind") == "vessel":
+        built = _vessel_tag_lines(flight, force=True)
+    else:
+        built = _aircraft_tag_lines(flight, force=True)
+    if not built:
+        return None
+    lines, block_h = built
+    rows, max_w = _measure_tag_rows(lines)
+    if not rows:
+        return None
+    on_right = _preferred_tag_on_right(x)
+    rect = _tag_rect(x, y, max_w, block_h, on_right)
+    if leader_rgb is None:
+        leader_rgb = _flight_icon_color(flight, compact=False)
+    color = _tag_leader_color(leader_rgb)
+    underline_w = rows[-1][0].get_width()
+    geo_pts = _tag_leader_geometry(x, y, rect, on_right, underline_w)
+    if geo_pts["stem"] is not None:
+        pygame.draw.line(surface, color, geo_pts["stem"][0], geo_pts["stem"][1], 2)
+    pygame.draw.line(
+        surface, color, geo_pts["underline"][0], geo_pts["underline"][1], 2
+    )
+    top = rect.top
+    for rendered, row_y in rows:
+        if on_right:
+            surface.blit(rendered, (rect.left, top + row_y))
+        else:
+            surface.blit(rendered, rendered.get_rect(topright=(rect.right, top + row_y)))
+    return rect
 
 
 def _label_key(flight) -> str:

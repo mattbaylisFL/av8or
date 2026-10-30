@@ -13,6 +13,9 @@ Independent Layers toggles:
   - ``show_airport_icons`` — ``airport.png`` pins (all map styles)
   - ``show_airport_centerlines`` — runway centerlines on dark/light maps only
     (skipped on VFR charts, which already depict runways)
+
+Hiding the pins does not hide the field. A tap on the airport reference
+point still opens the METAR tile, whose magnifying glass opens airport zoom.
 """
 
 from __future__ import annotations
@@ -73,10 +76,6 @@ def _centerlines_on() -> bool:
         return bool(settings.show_airport_centerlines())
     except Exception:
         return False
-
-
-def _enabled() -> bool:
-    return _icons_on() or _centerlines_on()
 
 
 def _map_style() -> str:
@@ -178,10 +177,11 @@ def _ensure_cached() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
 
     The OurAirports query can take hundreds of ms on a Pi — never do that on
     the display thread (it froze the sweep / first radar frame).
+
+    The list loads even when both Layers toggles are off, so a hidden field
+    stays tappable. Drawing still honors each toggle.
     """
     global _load_key, _loading
-    if not _enabled():
-        return [], []
     key = _query_key()
     if key is None:
         return [], []
@@ -424,12 +424,16 @@ def _draw_marker(
 def draw_airports(
     surface: pygame.Surface, pan_offset: tuple[int, int] | None = None
 ) -> None:
-    """Draw airport.png markers and/or runway centerlines per Layers toggles."""
+    """Draw airport.png markers and/or runway centerlines per Layers toggles.
+
+    The cache is warmed even when nothing is drawn, so the first tap on a
+    hidden field can still open the tile.
+    """
+    airports, runways = _ensure_cached()
     icons = _icons_on()
     runways_ok = _runways_allowed()
     if not icons and not runways_ok:
         return
-    airports, runways = _ensure_cached()
     if not airports and not runways:
         return
 
@@ -458,9 +462,10 @@ def draw_airports(
 def pick_airport_at(
     tap_x: int, tap_y: int, alt_x=None, alt_y=None
 ) -> tuple[dict[str, Any] | None, float | None]:
-    """Nearest airport pin under a tap. Returns ``(airport, distance_sq)`` or ``(None, None)``."""
-    if not _icons_on():
-        return None, None
+    """Nearest airport under a tap, whether or not its pin is drawn.
+
+    Returns ``(airport, distance_sq)`` or ``(None, None)``.
+    """
     airports, _ = _ensure_cached()
     if not airports:
         return None, None
@@ -490,9 +495,11 @@ def pick_airport_at(
 def airports_near(
     tap_x: int, tap_y: int, radius_px: int
 ) -> list[tuple[dict[str, Any], float]]:
-    """All airport pins within ``radius_px`` — [(airport, d2)] nearest-first."""
-    if not _icons_on():
-        return []
+    """Airports within ``radius_px`` — [(airport, d2)] nearest-first.
+
+    Includes fields whose pins are hidden, so the radial menu can still
+    offer the airport.
+    """
     airports, _ = _ensure_cached()
     r2 = float(radius_px) ** 2
     out = []

@@ -2047,6 +2047,12 @@ class RoundTouchDisplay:
             settings.toggle_lofi_title_scroll()
         elif action == "quiet":
             settings.set_atc_quiet_hours_enabled(not settings.atc_quiet_hours_enabled())
+        elif action == "quiet_always":
+            self._async_play_during_quiet(not settings.atc_play_during_quiet())
+        elif action == "quiet_override":
+            from utilities import atc_audio
+
+            self._async_quiet_override(not atc_audio.quiet_override_active())
         elif action == "quiet_dim":
             settings.set_quiet_dim_enabled(not settings.quiet_dim_enabled())
             self._apply_brightness()
@@ -2120,7 +2126,7 @@ class RoundTouchDisplay:
             if prev_airport and prev_mount:
                 settings.set_atc_airport(prev_airport)
                 settings.set_atc_mount(prev_mount)
-                atc_audio.start(override=True)
+                atc_audio.start(override=atc_audio.quiet_override_active())
         else:
             atc_audio.stop()
 
@@ -2141,7 +2147,7 @@ class RoundTouchDisplay:
         atc_audio.retune_if_playing(mount=nxt)
         if not atc_audio.is_playing() and prev_mount:
             settings.set_atc_mount(prev_mount)
-            atc_audio.start(override=True)
+            atc_audio.start(override=atc_audio.quiet_override_active())
 
     def _select_audio_output(self, value: str) -> None:
         """Apply USB or Bluetooth output from the Select output picker."""
@@ -2912,6 +2918,57 @@ class RoundTouchDisplay:
             self._atc_power_redraw = True
 
         Thread(target=_worker, daemon=True, name="atc-power").start()
+
+    def _async_quiet_override(self, enabled: bool) -> None:
+        """Flip the one-night row immediately; start or stop off-thread."""
+        from utilities import atc_audio
+
+        target = bool(enabled)
+        if target:
+            if (
+                settings.atc_play_during_quiet()
+                or not atc_audio.in_quiet_hours()
+            ):
+                return
+            end = atc_audio.quiet_window_end()
+            settings.set_atc_enabled(True)
+            settings.set_atc_want_playing(True)
+            settings.set_atc_quiet_override(True)
+            if end is not None:
+                settings.set_atc_quiet_override_until(
+                    end.strftime("%Y-%m-%dT%H:%M")
+                )
+        else:
+            settings.set_atc_quiet_override(False)
+        info.invalidate_atc_labels()
+
+        def _worker() -> None:
+            try:
+                atc_audio.set_quiet_override(target)
+            except Exception:
+                logger.exception("ATC quiet override failed")
+            info.invalidate_atc_labels()
+            self._atc_power_redraw = True
+
+        Thread(target=_worker, daemon=True, name="atc-quiet-override").start()
+
+    def _async_play_during_quiet(self, enabled: bool) -> None:
+        """Flip the always-play switch immediately; apply audio off-thread."""
+        from utilities import atc_audio
+
+        target = bool(enabled)
+        settings.set_atc_play_during_quiet(target)
+        info.invalidate_atc_labels()
+
+        def _worker() -> None:
+            try:
+                atc_audio.set_play_during_quiet(target)
+            except Exception:
+                logger.exception("ATC always-play apply failed")
+            info.invalidate_atc_labels()
+            self._atc_power_redraw = True
+
+        Thread(target=_worker, daemon=True, name="atc-play-during-quiet").start()
 
     def _execute_atc_action(self, action: str) -> None:
         """Legacy Play/Stop actions — both map to the single ATC power switch."""
@@ -4337,10 +4394,15 @@ class RoundTouchDisplay:
         """Screen-aware breadcrumb hit: curved band on curved-chrome screens."""
         if self.screen in (SCREEN_FLIP_BOARD, SCREEN_ISS):
             return False
+        if self.screen == SCREEN_AIRPORT:
+            # The name pill is the back target. The wide rim band was catching
+            # aircraft on the upper-left of the campus map.
+            label = airport_ground.ident() or tr("common.radar")
+            return nav.tap_curved_breadcrumb_pill(x, y, [label])
         if self.screen in (
             SCREEN_SETTINGS, SCREEN_DETAILS, SCREEN_FLIGHT, SCREEN_FIRE, SCREEN_QUAKE,
             SCREEN_FORECAST, SCREEN_UPDATE_NOTES,
-            SCREEN_TRACKED, SCREEN_AIRPORT,
+            SCREEN_TRACKED,
         ):
             return nav.tap_breadcrumb_curved(x, y)
         return nav.tap_breadcrumb(x, y)
@@ -5188,13 +5250,26 @@ class RoundTouchDisplay:
             if action == "radar":
                 self._return_to_radar()
                 self._safe_draw()
+            elif action == "worldmap":
+                airport_ground.toggle_basemap()
+                self._note_activity()
+                self._safe_draw()
             else:
-                picked = airport_ground.pick_flight(
-                    self._airport_flights(), tap[0], tap[1],
-                )
-                if picked and self._open_picked_flight(picked):
+                flights = self._airport_flights()
+                picked = airport_ground.pick_flight(flights, tap[0], tap[1])
+                if picked:
+                    # The icon raises the hockey stick. The stick opens details.
+                    airport_ground.show_callout(picked)
+                    self._note_activity()
                     self._safe_draw()
+                elif airport_ground.callout_hit(tap[0], tap[1]):
+                    tagged = airport_ground.callout_flight(flights)
+                    if tagged and self._open_picked_flight(tagged):
+                        self._safe_draw()
+                    else:
+                        self._note_activity()
                 else:
+                    airport_ground.clear_callout()
                     self._note_activity()
         elif tap and self.screen == SCREEN_DETAILS:
             action = details.tap_footer_action(tap[0], tap[1])

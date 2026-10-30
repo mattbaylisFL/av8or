@@ -2051,6 +2051,17 @@ def atc_status():
     return jsonify(atc_audio.status())
 
 
+@app.post("/atc/quiet-override")
+def atc_quiet_override():
+    from display.round_touch import settings
+    from utilities import atc_audio
+
+    data = request.get_json(silent=True) or {}
+    result = atc_audio.set_quiet_override(bool(data.get("enabled")))
+    settings.request_reload()
+    return jsonify(result)
+
+
 @app.post("/atc")
 def atc_save():
     from display.round_touch import settings
@@ -2079,6 +2090,10 @@ def atc_save():
         settings.set_atc_quiet_start(str(data.get("quiet_start") or ""))
     if "quiet_end" in data:
         settings.set_atc_quiet_end(str(data.get("quiet_end") or ""))
+    if "play_during_quiet" in data:
+        play_during_quiet = bool(data.get("play_during_quiet"))
+        if play_during_quiet != settings.atc_play_during_quiet():
+            atc_audio.set_play_during_quiet(play_during_quiet)
 
     action = str(data.get("action") or "").strip().lower()
     # Legacy Play/Stop map onto the single enable switch.
