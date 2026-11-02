@@ -36,15 +36,49 @@ Hitches over 48 ms 57.0 to 56.9 per minute: the GIL floor, unchanged.
 
 Still open, in priority order:
 
-- loop_sleep overrun of 13 to 14 ms even on near-zero sleeps is the main thread waiting to reacquire the GIL from
-  the worker threads (prewarm rotate, flip-board observer, grab), not the kernel. It is now the floor under the
-  remaining 48 to 60 ms hitches: 33 ms frame plus about 14 ms GIL wait plus loop_misc. Candidates:
-  0_prewarm_rotate 6 ms, flip_observe 13 to 23 ms avg on its worker (still shares the GIL), 4a_rotate spikes to
-  125 ms. sys.setswitchinterval(0.001) made no difference earlier; the real fix is less Python on the workers
-  (or C-level pygame calls that release the GIL) or a separate process for the grab.
+- ROOT CAUSE FOUND 2026-11-02, fix pending: the "GIL floor" is fork(). bluetooth_audio._run_as_audio_user passes
+  user= to subprocess.run, and CPython then cannot use vfork, so every pactl / wpctl probe forks the 380 MB display
+  process (page table copy, 15.6 ms avg, 20 ms max per strace, GIL held throughout, then copy-on-write faults on
+  the next draw). audio_output's speaker watch (3 s, force=True), its 2 s cache and the 8 s Bluetooth reconnect
+  watch add up to about 27 such forks a minute, one hitch each. Evidence: the sleep overrun fires on only 0.4% of
+  loop iterations (about one per 2 s), is uncorrelated with the prewarm, flip-board and grab stages, and
+  sys._current_frames() at overrun time shows subprocess._execute_child under bluetooth_audio in 48% of samples
+  and 0% of baseline samples. A standalone benchmark on the Pi put the OS sleep floor at 0.1 ms and a pure Python
+  worker at the 2 ms switch interval; full-size blits, fills and copies on a worker hold the GIL 4 to 10 ms, while
+  transform.rotate, smoothscale and image.load release it.
+  Trial (setpriv --reuid/--regid/--init-groups in front of the command instead of user=, so vfork is used), same
+  device, 4 minute radar windows: hitches over 48 ms 48.5 to 8.6 per minute, jank over 66 ms 8.5 to 0.8, over
+  99 ms 0.8 to 0.2, draw avg 14.0 to 11.7 ms, interval p95 57 to 41 ms, sleep overruns 112 to 2 per window.
+  Plan: (1) setpriv wrapper with a user= fallback in bluetooth_audio and atc_audio's unmute, with tests;
+  (2) one shared sink/device poller at 10 to 15 s instead of three overlapping probes, event-driven via
+  pactl subscribe if it stays simple; (3) audit the nmcli cadence (about 0.6 spawns a second from the display
+  process: ap_radio_active and the connection list) and read /sys/class/net where it answers the question;
+  (4) remeasure, release, PR upstream. The 380 MB RSS itself (surface caches) makes any fork expensive and is a
+  separate item.
 - 2r_bezel still averages 5 ms per rebuild: apply_round_bezel band blits plus the HUD overlay once a minute
   (pills and text are cached now; the clock string is a fresh render each minute by nature).
 - 2r_flights 8 to 9 ms per rebuild (max 19) with about 12 targets: trail drawing and tag placement.
 - py-spy with --native stalls this process for seconds per sample on the Pi; use the FLIGHTSCNR_FRAME_DEBUG
   stages instead. faulthandler.dump_traceback_later never fired inside the app for stalls that were plain CPU
   time in C (PNG decode); unexplained.
+
+## Display protection (requested 2026-11-02)
+
+Next work item after the GIL / fork stall work above: an auto-dim feature to protect the round panel from burn-in.
+Today the app has a manual brightness slider (backlight.apply_percent: sysfs backlight when present, else X11 DPMS
+for off) and a scheduled quiet-hours dim (quiet_dim_enabled / quiet_dim_percent). There is no activity-based dim,
+no idle screen-off and no static-pixel protection. Candidates to decide between before implementing:
+
+- Idle auto-dim: dim to a configurable level after N minutes without touch or a tracked event, restore on touch.
+  The Pi panel exposes a sysfs backlight (/sys/class/backlight/10-0045, 0 to 255), so dimming is a hardware
+  write; keep a software dim fallback (dark overlay on the frame) for panels without one.
+- Idle screen-off / DPMS: blank after a longer idle period; wake on touch or on new traffic inside the inner ring.
+- Pixel shift: move the whole rendered frame by 1 to 2 px on a slow cycle (every few minutes) so static HUD pills,
+  range rings and the attribution line do not sit on the same pixels for hours. Cheap with the existing rotation
+  and present path.
+- Static element fade: lower the alpha of the HUD arc, range labels and zoom pill when nothing has changed for a
+  while, bring them back on touch or traffic.
+- Ambient light following: if a light sensor or camera is available, track room brightness; otherwise follow a
+  sunrise/sunset curve from the home location (already known) as a proxy.
+- Portal and on-screen settings for all of the above, kept in sync (settings.py option lists plus web/app.py and
+  index.html), with the catalogue strings in all six locales.
