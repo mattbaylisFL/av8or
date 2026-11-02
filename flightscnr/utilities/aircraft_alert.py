@@ -240,10 +240,6 @@ def flights_share_identity(a: dict, b: dict) -> bool:
 # both sides share an ICAO type and one side has no callsign (departure climb).
 _CROSS_FEED_THRESHOLD_KM = 15.0
 _ALT_MATCH_FT = 500.0
-# dedupe_flights releases the GIL for _DEDUPE_YIELD_S after every
-# _DEDUPE_YIELD_AFTER_S of work (about one sweep frame's slack at 30 fps).
-_DEDUPE_YIELD_AFTER_S = 0.004
-_DEDUPE_YIELD_S = 0.003
 
 
 def _source_kind(flight: dict) -> str:
@@ -487,15 +483,10 @@ def dedupe_flights(flights: list[dict], *, threshold_km: float = 1.2) -> list[di
     def _is_fr24(flight: dict) -> bool:
         return (flight.get("data_source") or "").startswith("fr24")
 
-    def _needs_wide(flight: dict) -> bool:
-        """Wide FR24↔ADS-B merge only when at least one side lacks callsign keys."""
-        return not _callsign_keys(flight)
-
     kept: list[dict] = []
     by_identity: dict[str, int] = {}
     by_cell: dict[tuple[int, int], list[int]] = {}
     by_wide_cell: dict[tuple[int, int], list[int]] = {}
-    wide_idxs: list[int] = []
 
     def _index(idx: int, flight: dict) -> None:
         for key in flight_identity_keys(flight):
@@ -508,9 +499,6 @@ def dedupe_flights(flights: list[dict], *, threshold_km: float = 1.2) -> list[di
         if lat is not None:
             by_cell.setdefault(_cell(lat, lon), []).append(idx)
             by_wide_cell.setdefault(_wide_cell(lat, lon), []).append(idx)
-        if _needs_wide(flight) or _is_fr24(flight):
-            if idx not in wide_idxs:
-                wide_idxs.append(idx)
 
     def _unindex(idx: int, flight: dict) -> None:
         for key in flight_identity_keys(flight):
@@ -529,11 +517,6 @@ def dedupe_flights(flights: list[dict], *, threshold_km: float = 1.2) -> list[di
                         bucket.remove(idx)
                     except ValueError:
                         pass
-        try:
-            wide_idxs.remove(idx)
-        except ValueError:
-            pass
-
     def _find_duplicate(flight: dict) -> int | None:
         for key in flight_identity_keys(flight):
             idx = by_identity.get(key)
@@ -572,47 +555,18 @@ def dedupe_flights(flights: list[dict], *, threshold_km: float = 1.2) -> list[di
                         flight, other, near_km=threshold_km
                     ):
                         return idx
-        # Legacy blank-callsign wide list (covers odd orderings / missing coords).
-        flight_fr24 = _is_fr24(flight)
-        flight_blank = _needs_wide(flight)
-        if flight_blank or flight_fr24:
-            for idx in wide_idxs:
-                if idx in checked:
-                    continue
-                other = kept[idx]
-                if flight_fr24 == _is_fr24(other):
-                    continue  # same feed — tight grid already covered
-                if flights_match_by_position(flight, other, near_km=threshold_km):
-                    return idx
-            if flight_fr24 and flight_blank:
-                for idx, other in enumerate(kept):
-                    if idx in checked:
-                        continue
-                    if _source_kind(other) != "adsb":
-                        continue
-                    checked.add(idx)
-                    if flights_match_by_position(flight, other, near_km=threshold_km):
-                        return idx
-        elif _source_kind(flight) == "adsb":
-            for idx in wide_idxs:
-                if idx in checked:
-                    continue
-                other = kept[idx]
-                if not _is_fr24(other) or _callsign_keys(other):
-                    continue
-                if flights_match_by_position(flight, other, near_km=threshold_km):
-                    return idx
+        # The wide spatial grid is symmetric, so it covers either feed order.
+        # A former fallback scanned every wide candidate (and sometimes every
+        # kept track) after this pass. Missing-coordinate entries cannot match
+        # by position, and positioned entries are already in the 3x3 grid; the
+        # fallback only restored O(n²) GIL time in dense traffic.
         return None
 
-    # Give the sweep the GIL after every few ms of work so a dense dedupe
-    # cannot freeze the beam for a full DATA_REFRESH quantum. The budget is
-    # wall time rather than a flight count: five flights can be 0.5 ms or
-    # 15 ms depending on how many grid neighbours they probe.
-    chunk_started = time.monotonic()
-    for flight in flights:
-        if time.monotonic() - chunk_started >= _DEDUPE_YIELD_AFTER_S:
-            time.sleep(_DEDUPE_YIELD_S)
-            chunk_started = time.monotonic()
+    for i, flight in enumerate(flights):
+        if i and i % 8 == 0:
+            # Yield without imposing a fixed 3ms delay. The indexed pass is now
+            # bounded enough that a cooperative scheduler handoff is sufficient.
+            time.sleep(0)
         dup_idx = _find_duplicate(flight)
         if dup_idx is None:
             _index(len(kept), flight)

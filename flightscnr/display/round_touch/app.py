@@ -12,6 +12,7 @@
 import logging
 import math
 import os
+import queue
 import signal
 import time
 from threading import Thread
@@ -203,6 +204,12 @@ class RoundTouchDisplay:
         self._follow_confirm = None
         # Auto-clear notice after Follow/Tracked loses the flight.
         self._tracking_cleared_popup = False
+        # RAM card: "board" (2 GB or less, remembered) or "pressure" (this boot).
+        from utilities.ram_notice import PressureMonitor
+
+        self._ram_pressure = PressureMonitor()
+        self._ram_kind: str | None = None
+        self._ram_check_at = 0.0
         # Stable identity for the open detail page (index alone drifts as traffic changes).
         self._selected_flight_id: str | None = None
         self.fire_index = 0
@@ -227,6 +234,8 @@ class RoundTouchDisplay:
         self._last_clock_minute = -1
         self._flip_board_sampled_at = 0.0
         self._flip_board_saved_at = 0.0
+        self._flip_board_worker: Thread | None = None
+        self._flip_board_results: queue.SimpleQueue = queue.SimpleQueue()
         self._last_clock_draw = 0.0
         self._last_radar_draw = 0
         self._last_static_draw = 0
@@ -939,6 +948,7 @@ class RoundTouchDisplay:
         if (
             self.screen == SCREEN_RADAR
             and not self._alarm_overlay_active()
+            and not self._ram_notice_active()
             and not self._calibrating_facing
             and not self._panning_map
             and not self._pan_commit_choice
@@ -1022,7 +1032,19 @@ class RoundTouchDisplay:
             )
         elif self.screen == SCREEN_RADAR:
             _t = time.perf_counter()
-            radar_flights = self._radar_flights()
+            layer, _layer_gen = radar.frame_layer_snapshot()
+            needs_projected_flights = (
+                layer is None
+                or self._calibrating_facing
+                or self._panning_map
+                or self._pan_commit_choice
+            )
+            # A fresh cached layer does not consume this argument, and live
+            # sprites query the smoother individually. Copying/dead-reckoning
+            # the entire dense feed here cost ~5ms on every sweep frame.
+            radar_flights = (
+                self._radar_flights() if needs_projected_flights else self.flights
+            )
             if FRAME_DEBUG:
                 self._stage("1_flights", time.perf_counter() - _t)
                 _t = time.perf_counter()
@@ -1037,7 +1059,7 @@ class RoundTouchDisplay:
             )
             # The sweep present path never shows this buffer. While the alarm
             # is up, paint the radar layer here so the popup sits on top of it.
-            if self._alarm_overlay_active():
+            if self._alarm_overlay_active() or self._ram_notice_active():
                 layer, _layer_gen = radar.frame_layer_snapshot()
                 if layer is not None:
                     try:
@@ -1182,6 +1204,7 @@ class RoundTouchDisplay:
         else:
             power_menu.clear_icon()
         self._draw_alarm_overlay()
+        self._draw_ram_notice()
         remaining = self._timeout_remaining_fraction()
         if remaining is not None:
             # Snapshot content+bezel (no ring) and a pre-rotated display base so
@@ -1569,12 +1592,24 @@ class RoundTouchDisplay:
 
         Runs whether or not the board screen is switched on. The Layers
         toggle gates reaching the screen; gating collection too meant
-        switching the board on gave you an empty one. Measured on the device
-        at 0.47 ms per sample for 25 aircraft over 6 airports, and 4.3 ms for
-        120 over 30, once every four seconds.
+        switching the board on gave you an empty one. Dense snapshots can take
+        tens of milliseconds, so observation and checkpoint I/O run on one
+        worker instead of stopping the display loop.
         """
         now = time.time()
+        try:
+            while True:
+                events, identity_changed = self._flip_board_results.get_nowait()
+                if self.screen == SCREEN_FLIP_BOARD and (events or identity_changed):
+                    if events:
+                        flap_sound.reset()
+                    self._invalidate_timeout_content_cache()
+                    self._safe_draw()
+        except queue.Empty:
+            pass
         if now - self._flip_board_sampled_at < self._FLIP_BOARD_SAMPLE_S:
+            return
+        if self._flip_board_worker is not None and self._flip_board_worker.is_alive():
             return
         self._flip_board_sampled_at = now
         try:
@@ -1584,29 +1619,35 @@ class RoundTouchDisplay:
             airports = airport_overlay.in_view_airports()
             if not airports:
                 return
-            _lt = time.perf_counter()
-            events = flip_board_data.tracker().observe(flights, airports, now)
-            self._loop_stage("flip_observe", _lt)
-            identity_changed = bool(flip_board_data.tracker().identity_changed)
-            if self.screen == SCREEN_FLIP_BOARD and (events or identity_changed):
-                # New rows, or older tail-only rows that just got a callsign
-                # from the live feed, should flap to the selected identity.
-                if events:
-                    flap_sound.reset()
-                self._invalidate_timeout_content_cache()
-                self._safe_draw()
-            # Write when something landed or left, when we filled airline
-            # ids onto a row that was stored as tail-only, or on a slow
-            # checkpoint so pending approaches survive a restart.
-            if (
-                events
-                or identity_changed
-                or now - self._flip_board_saved_at >= self._FLIP_BOARD_TRACK_SAVE_S
-            ):
+            save_due = now - self._flip_board_saved_at >= self._FLIP_BOARD_TRACK_SAVE_S
+            if save_due:
                 self._flip_board_saved_at = now
-                _lt = time.perf_counter()
-                flip_board_data.save()
-                self._loop_stage("flip_save", _lt)
+
+            def _observe_and_save() -> None:
+                try:
+                    _lt = time.perf_counter()
+                    tracker = flip_board_data.tracker()
+                    events = tracker.observe(tuple(flights), tuple(airports), now)
+                    if FRAME_DEBUG:
+                        frame_debug.stage("flip_observe", time.perf_counter() - _lt)
+                    identity_changed = bool(tracker.identity_changed)
+                    # Write when something landed or left, when we filled airline
+                    # ids onto a row, or on a slow checkpoint so approaches survive.
+                    if events or identity_changed or save_due:
+                        _save_t = time.perf_counter()
+                        flip_board_data.save()
+                        if FRAME_DEBUG:
+                            frame_debug.stage("flip_save", time.perf_counter() - _save_t)
+                    self._flip_board_results.put((events, identity_changed))
+                except Exception:
+                    logger.debug("Flip board worker failed", exc_info=True)
+
+            self._flip_board_worker = Thread(
+                target=_observe_and_save,
+                name="flip-board-observer",
+                daemon=True,
+            )
+            self._flip_board_worker.start()
         except Exception:
             logger.debug("Flip board update failed", exc_info=True)
 
@@ -4675,6 +4716,9 @@ class RoundTouchDisplay:
         if alarm_clock.is_ringing() or alarm_ui.editor_open():
             self._handle_alarm_input()
             return
+        if self._ram_notice_active():
+            self._handle_ram_notice_input()
+            return
 
         self._handle_scroll_drag()
 
@@ -5473,7 +5517,7 @@ class RoundTouchDisplay:
             self._last_static_draw = now
             self._safe_draw()
             return
-        if self._alarm_overlay_active():
+        if self._alarm_overlay_active() or self._ram_notice_active():
             return
         if self._timeout_remaining_fraction() is None:
             return
@@ -5558,6 +5602,73 @@ class RoundTouchDisplay:
             return
         if alarm_ui.editor_open() and alarm_ui.tick_scroll():
             self._safe_draw()
+
+    def _ram_notice_active(self) -> bool:
+        if not self._session_unlocked or self._ram_kind is None:
+            return False
+        if self.screen in (SCREEN_DISCLAIMER, SCREEN_WIFI_SETUP):
+            return False
+        if self._alarm_overlay_active() or self._tracking_cleared_popup:
+            return False
+        from utilities import system_control
+
+        if system_control.reboot_progress_copy() is not None:
+            return False
+        return True
+
+    def _draw_ram_notice(self) -> None:
+        from display.round_touch.screens import ram_notice
+
+        if not self._ram_notice_active():
+            ram_notice.clear_notice()
+            return
+        ram_notice.draw_notice(self.surface, self._ram_kind or "pressure")
+
+    def _handle_ram_notice_input(self) -> None:
+        from display.round_touch.screens import ram_notice
+
+        gesture = self.input.consume_gesture()
+        if not gesture or gesture[0] != "tap":
+            if gesture:
+                self._note_activity()
+            return
+        pos = gesture[1]
+        if pos is None or not ram_notice.ok_hit(pos[0], pos[1]):
+            self._note_activity()
+            return
+        if self._ram_kind == "board":
+            settings.set_low_ram_board_dismissed(True)
+            self._ram_kind = "pressure" if self._ram_pressure.showing() else None
+        else:
+            self._ram_pressure.dismiss()
+            self._ram_kind = None
+        ram_notice.clear_notice()
+        self._note_activity()
+        self._safe_draw()
+
+    def _tick_ram_notice(self) -> None:
+        """Sample about once a minute. The board card can appear on the first sample."""
+        now = time.monotonic()
+        if self._ram_check_at and now - self._ram_check_at < 60.0:
+            return
+        self._ram_check_at = now
+        from utilities import ram_notice as ram_logic
+        from utilities.system_stats import ram_stats
+
+        _pct, used_mb, total_mb = ram_stats()
+        available = None
+        if used_mb is not None and total_mb is not None:
+            available = total_mb - used_mb
+        self._ram_pressure.sample(available)
+        kind = ram_logic.active_kind(
+            small_board=ram_logic.this_board_is_small(total_mb),
+            hardware_dismissed=settings.low_ram_board_dismissed(),
+            pressure=self._ram_pressure.showing(),
+        )
+        if kind == self._ram_kind:
+            return
+        self._ram_kind = kind
+        self._safe_draw()
 
     def _tick_clock(self):
         if self.screen not in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST):
@@ -6879,6 +6990,7 @@ class RoundTouchDisplay:
                     ring_on = (
                         self._timeout_remaining_fraction() is not None
                         and not self._alarm_overlay_active()
+                        and not self._ram_notice_active()
                     )
                     if ring_on:
                         # Never timer-refresh content while the ring is crawling —
@@ -6937,6 +7049,7 @@ class RoundTouchDisplay:
                         logger.debug("Audio tick failed", exc_info=True)
                     hourly_chime.tick()
                     self._tick_alarm()
+                    self._tick_ram_notice()
                     self._tick_hourly_weather_refresh()
                     self._tick_manual_weather_refresh()
                     self._tick_off_hours_clock()
