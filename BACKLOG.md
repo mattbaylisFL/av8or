@@ -28,6 +28,12 @@ the same for its pills once a minute. Same device, 3 minute windows, about 11 ta
 minute, p50 59 to 56 ms: the GIL floor below is untouched. Note: _draw_status itself was never the cost (it
 returns in 0.03 ms when traffic is visible); the earlier "_visible_flights 12 ms" guess was the zoom pill.
 
+Fixed 2026-11-02 (HUD overlay pre-rotated on the rebuild thread, HUD text through the text cache, update status
+read once per check with a 2 s bubble cache): the render thread no longer rotates the 1080 px SRCALPHA HUD overlay
+when the clock minute changes. Same device, 4 minute windows, 12 to 14 targets: 4p_overlays max 27.4 to 3.3 ms
+(avg 2.5 to 1.4), layer cost max 47 to 31 ms, jank over 66 ms 17.0 to 13.9 per minute, over 99 ms 2.0 to 1.0.
+Hitches over 48 ms 57.0 to 56.9 per minute: the GIL floor, unchanged.
+
 Still open, in priority order:
 
 - loop_sleep overrun of 13 to 14 ms even on near-zero sleeps is the main thread waiting to reacquire the GIL from
@@ -36,12 +42,9 @@ Still open, in priority order:
   0_prewarm_rotate 6 ms, flip_observe 13 to 23 ms avg on its worker (still shares the GIL), 4a_rotate spikes to
   125 ms. sys.setswitchinterval(0.001) made no difference earlier; the real fix is less Python on the workers
   (or C-level pygame calls that release the GIL) or a separate process for the grab.
-- 2r_bezel still averages 4.9 ms per rebuild: apply_round_bezel band blits plus the HUD overlay text and icon
-  rerender once a minute (pills are cached now). Cache the HUD text clusters per minute string.
-- 2r_flights 8 to 9 ms per rebuild (max 19) with about 11 targets: trail drawing and tag placement.
-- The render thread reads update-status.json about 7 times a second (updater.update_running via several callers)
-  and the HUD overlay is rotated (1080 px SRCALPHA) on the render thread when its signature changes
-  (4p_overlays max 25 to 33 ms).
+- 2r_bezel still averages 5 ms per rebuild: apply_round_bezel band blits plus the HUD overlay once a minute
+  (pills and text are cached now; the clock string is a fresh render each minute by nature).
+- 2r_flights 8 to 9 ms per rebuild (max 19) with about 12 targets: trail drawing and tag placement.
 - py-spy with --native stalls this process for seconds per sample on the Pi; use the FLIGHTSCNR_FRAME_DEBUG
   stages instead. faulthandler.dump_traceback_later never fired inside the app for stalls that were plain CPU
   time in C (PNG decode); unexplained.
