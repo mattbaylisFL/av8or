@@ -11,13 +11,25 @@ refreshed within a 6 ms budget), the flip board (now on its own worker, one airp
 _radar_flights() copy on cached-layer frames, trail point decimation, and oldest-entry eviction for the rotated,
 rotor and glow caches.
 
-Still open:
+Measured again on 2026.11.2.11 (2026-11-01 20:18 to 20:21 ET, about 15 targets): 27.3 fps, 62 hitches over 48 ms
+per minute, p50 59 ms, 1.7 per minute over 99 ms, worst 218 ms. 4_present fell from 12.4 to 8.4 ms with upstream's
+live frame cache; the hitch rate did not move. 73% of hitches happen with no grab in flight (hitch log proc=0).
 
-- The once-a-second 55 to 65 ms hitch (about 60/min, p50 55 to 58 ms) survived both the dedupe fix and the icon
-  caches; dedupe was not its cause. loop_sleep_overrun around 13 ms points at the pacing loop and the rest of
-  pipe_grab_total (route enrichment, logo resolution, json writes). Next step: add wall and thread-CPU stages to
-  the remaining grab steps, then move the overhead grab into a separate process if any one of them holds the GIL
-  for more than a frame. Re-measure first on 2026.11.2.x with upstream's changes in.
+Still open, in priority order:
+
+- Frame pacing quantisation (the 55 to 65 ms hitch). The radar draw decision is made once per loop iteration, and
+  an iteration is loop_misc (7 ms avg) plus a 4 ms sleep that overruns by 13 ms, so about 20 to 25 ms. Any
+  iteration that ends past the 33 ms deadline costs a whole extra iteration, which is exactly the 55 to 60 ms gap
+  mode in the hitch histogram (smooth decay from 48 ms, no separate cluster). Fix: sleep until the next draw
+  deadline (min of the input-poll sleep and time remaining) and poll input without sleeping when a draw is due.
+  Expect the 48 ms hitch rate to drop sharply and fps to approach 30.
+- loop_sleep overrun of 13 ms on a 4 ms sleep is GIL contention from the worker threads (prewarm rotate,
+  flip-board observer, grab), not the kernel. Candidates: 0_prewarm_rotate 6 ms, flip_observe 23 ms avg on its
+  worker (still shares the GIL), 4a_rotate spikes to 125 ms. sys.setswitchinterval(0.001) made no difference
+  earlier; the only real fix is less Python on the workers or a separate process for the grab.
+- loop_misc outliers to 160 ms (2r_bezel 132 ms in the same frame): bezel rebuild when the ring or status text
+  changes. Cache the bezel surface per signature.
+- 2r_status (radar._draw_status) recomputes _visible_flights on every layer rebuild, about 12 ms each.
 - Pacing floor: the 4 ms yield sleep overruns by about 14 ms on average (loop_sleep_overrun), so the 33 ms timer
   lands at 36 to 38 ms (27 to 28 fps) with a few ms of jitter per frame. No vsync is available on the X11 path.
 - The render thread reads update-status.json about 7 times a second (updater.update_running via several callers)
