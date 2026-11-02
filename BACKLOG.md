@@ -15,18 +15,19 @@ Measured again on 2026.11.2.11 (2026-11-01 20:18 to 20:21 ET, about 15 targets):
 per minute, p50 59 ms, 1.7 per minute over 99 ms, worst 218 ms. 4_present fell from 12.4 to 8.4 ms with upstream's
 live frame cache; the hitch rate did not move. 73% of hitches happen with no grab in flight (hitch log proc=0).
 
+Fixed 2026-11-01 (sweep_poll_sleep_s in app.py): the loop now sleeps only until the next sweep frame is due
+instead of a fixed 4 ms. Same device, 3 minute windows: 27.3 to 29.6 fps, interval avg 37.0 to 34.1 ms, jank over
+66 ms 14.2 to 6.7 per minute, over 99 ms 1.7 to 0, worst gap 218 to 92 ms. Hitches over 48 ms only 62 to 57 per
+minute, p50 59 to 56 ms (about 9 targets in the after window).
+
 Still open, in priority order:
 
-- Frame pacing quantisation (the 55 to 65 ms hitch). The radar draw decision is made once per loop iteration, and
-  an iteration is loop_misc (7 ms avg) plus a 4 ms sleep that overruns by 13 ms, so about 20 to 25 ms. Any
-  iteration that ends past the 33 ms deadline costs a whole extra iteration, which is exactly the 55 to 60 ms gap
-  mode in the hitch histogram (smooth decay from 48 ms, no separate cluster). Fix: sleep until the next draw
-  deadline (min of the input-poll sleep and time remaining) and poll input without sleeping when a draw is due.
-  Expect the 48 ms hitch rate to drop sharply and fps to approach 30.
-- loop_sleep overrun of 13 ms on a 4 ms sleep is GIL contention from the worker threads (prewarm rotate,
-  flip-board observer, grab), not the kernel. Candidates: 0_prewarm_rotate 6 ms, flip_observe 23 ms avg on its
-  worker (still shares the GIL), 4a_rotate spikes to 125 ms. sys.setswitchinterval(0.001) made no difference
-  earlier; the only real fix is less Python on the workers or a separate process for the grab.
+- loop_sleep overrun of 13 to 14 ms even on near-zero sleeps is the main thread waiting to reacquire the GIL from
+  the worker threads (prewarm rotate, flip-board observer, grab), not the kernel. It is now the floor under the
+  remaining 48 to 60 ms hitches: 33 ms frame plus about 14 ms GIL wait plus loop_misc. Candidates:
+  0_prewarm_rotate 6 ms, flip_observe 13 to 23 ms avg on its worker (still shares the GIL), 4a_rotate spikes to
+  125 ms. sys.setswitchinterval(0.001) made no difference earlier; the real fix is less Python on the workers
+  (or C-level pygame calls that release the GIL) or a separate process for the grab.
 - loop_misc outliers to 160 ms (2r_bezel 132 ms in the same frame): bezel rebuild when the ring or status text
   changes. Cache the bezel surface per signature.
 - 2r_status (radar._draw_status) recomputes _visible_flights on every layer rebuild, about 12 ms each.
