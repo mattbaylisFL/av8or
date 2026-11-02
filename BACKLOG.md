@@ -36,7 +36,7 @@ Hitches over 48 ms 57.0 to 56.9 per minute: the GIL floor, unchanged.
 
 Still open, in priority order:
 
-- ROOT CAUSE FOUND 2026-11-02, fix pending: the "GIL floor" is fork(). bluetooth_audio._run_as_audio_user passes
+- ROOT CAUSE FOUND 2026-11-02, step 1 shipped 2026-11-02 (utilities/run_as_user.py): the "GIL floor" is fork(). bluetooth_audio._run_as_audio_user passes
   user= to subprocess.run, and CPython then cannot use vfork, so every pactl / wpctl probe forks the 380 MB display
   process (page table copy, 15.6 ms avg, 20 ms max per strace, GIL held throughout, then copy-on-write faults on
   the next draw). audio_output's speaker watch (3 s, force=True), its 2 s cache and the 8 s Bluetooth reconnect
@@ -49,11 +49,24 @@ Still open, in priority order:
   Trial (setpriv --reuid/--regid/--init-groups in front of the command instead of user=, so vfork is used), same
   device, 4 minute radar windows: hitches over 48 ms 48.5 to 8.6 per minute, jank over 66 ms 8.5 to 0.8, over
   99 ms 0.8 to 0.2, draw avg 14.0 to 11.7 ms, interval p95 57 to 41 ms, sleep overruns 112 to 2 per window.
-  Plan: (1) setpriv wrapper with a user= fallback in bluetooth_audio and atc_audio's unmute, with tests;
-  (2) one shared sink/device poller at 10 to 15 s instead of three overlapping probes, event-driven via
-  pactl subscribe if it stays simple; (3) audit the nmcli cadence (about 0.6 spawns a second from the display
-  process: ap_radio_active and the connection list) and read /sys/class/net where it answers the question;
-  (4) remeasure, release, PR upstream. The 380 MB RSS itself (surface caches) makes any fork expensive and is a
+  Step 1 DONE (setpriv wrapper with a user= fallback in bluetooth_audio and atc_audio's unmute, tests in
+  tests/test_run_as_user.py). Clean-patch A/B on the Pi, 4 minute radar windows: hitches over 48 ms 64.5 to
+  18.0 per minute, jank over 66 ms 16.8 to 7.8, draw avg 16.7 to 14.5 ms, interval p95 42 to 39 ms, sleep
+  overruns over 5 ms seen in 69 of 120 windows to none, fps 29.4 to 29.8. Remaining hitches: p50 65 ms, 38%
+  with a grab in flight, one 231 ms outlier per run.
+  Step 2 (probe cadence, measured on this Pi with audio_route=usb, no speaker): audio_output's speaker watch
+  (3 s) ends in pactl list short sinks via is_output_ready() with no preferred MAC; the bluetooth_audio watch
+  (8 s, usb branch) runs ensure_usb_pulse_sink -> find_usb_sink -> pactl, twice when no USB card exists. The
+  flap clatter and chime hit the 2 s cache between polls. Proposed: gate is_output_ready/is_connected on
+  /sys/class/bluetooth/hci*/hci*:* (an ACL link entry exists only while a device is connected; verify with a
+  paired speaker), skip ensure_usb_pulse_sink when /proc/asound has no USB card, raise the watch to 5 to 10 s.
+  Step 3 (nmcli): with auto_wifi_setup_hotspot on, _tick_wifi_link calls link_up() every 2 s and the 2 s
+  cache TTL makes every call a refresh: probe_client_wifi runs nmcli device status, GENERAL.CONNECTION device
+  show and 802-11-wireless.mode connection show, three spawns per 2 s (about 150 ms CPU plus a D-Bus round trip
+  each). ap_radio_active and saved_client_wifi_names only run on the setup screen. Proposed: key the nmcli
+  classification on the /sys/class/net/wlan0 (operstate, carrier) tuple and re-run nmcli only when that tuple
+  changes or every 30 s, invalidating from ensure_setup_ap/stop_setup_ap.
+  Step 4: remeasure after 2 and 3, release, PR upstream. The 380 MB RSS itself (surface caches) makes any fork expensive and is a
   separate item.
 - 2r_bezel still averages 5 ms per rebuild: apply_round_bezel band blits plus the HUD overlay once a minute
   (pills and text are cached now; the clock string is a fresh render each minute by nature).
