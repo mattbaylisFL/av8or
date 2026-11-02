@@ -7,9 +7,13 @@ Findings noticed but deferred. Keep entries short; link the measurement that fou
 Fixed in the sweep-perf patch (icon sprite caches, altitude colour snap, secrets.json cache, ATC orphan scan cache):
 the 300 to 580 ms sweep freezes. Remaining, in order of measured cost:
 
-- Grab pipeline shares the GIL with the render thread: pipe_dedupe is about 90 ms of pure Python every 2 s and
-  shows up as the once-a-second 55 to 65 ms hitch (hitch log proc=1 share about 45%). Structural fix is moving the
-  overhead grab into a separate process, or at least chunking dedupe with explicit yields.
+- Grab pipeline shares the GIL with the render thread. pipe_dedupe was 55 to 110 ms per cycle (quadratic
+  identity-key recomputation per flight pair); the key memoisation patch took it to 4 ms, but the once-a-second
+  55 to 65 ms hitch rate did not change (61/min before, 60/min after, light traffic), so dedupe was not its cause.
+  The hitch p50 of 55 to 58 ms with loop_sleep_overrun around 13 ms points at the pacing loop and the rest of
+  pipe_grab_total (route enrichment, logo resolution, json writes) instead. Next step: add wall and thread-CPU
+  stages to the remaining grab steps, then move the overhead grab into a separate process if any one of them
+  holds the GIL for more than a frame.
 - Live icon frame (smooth motion) spikes to 30 to 80 ms when a position batch changes many headings at once:
   every affected sprite is re-rendered and its sub-pixel variants regenerated (radar._icon_vis, _subpixel_variant).
   Consider rendering new variants on the prewarm worker, or capping variants per frame lower than 10.
