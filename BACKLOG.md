@@ -54,7 +54,12 @@ Still open, in priority order:
   18.0 per minute, jank over 66 ms 16.8 to 7.8, draw avg 16.7 to 14.5 ms, interval p95 42 to 39 ms, sleep
   overruns over 5 ms seen in 69 of 120 windows to none, fps 29.4 to 29.8. Remaining hitches: p50 65 ms, 38%
   with a grab in flight, one 231 ms outlier per run.
-  Step 2 (probe cadence, measured on this Pi with audio_route=usb, no speaker): audio_output's speaker watch
+  Steps 2 and 3 DONE 2026-11-02 (sysfs gates in bluetooth_audio, sysfs-keyed nmcli cache in wifi_setup,
+  tests/test_probe_gates.py). A/B with the paired speaker switched off: child processes 135 to 34 per minute
+  (bluetoothctl 90 to 24, nmcli 44 to 6), PIDs allocated 406 to 150 per minute, display CPU 90.2 to 89.1% of
+  a core, frame timing within noise. Remaining bluetoothctl calls are the reconnect attempts (backed off to
+  32 s). Not done: the 380 MB RSS item below, and a pactl subscribe event stream was judged not worth it.
+  Original step 2 notes (probe cadence, measured on this Pi with audio_route=usb, no speaker): audio_output's speaker watch
   (3 s) ends in pactl list short sinks via is_output_ready() with no preferred MAC; the bluetooth_audio watch
   (8 s, usb branch) runs ensure_usb_pulse_sink -> find_usb_sink -> pactl, twice when no USB card exists. The
   flap clatter and chime hit the 2 s cache between polls. Proposed: gate is_output_ready/is_connected on
@@ -66,8 +71,13 @@ Still open, in priority order:
   each). ap_radio_active and saved_client_wifi_names only run on the setup screen. Proposed: key the nmcli
   classification on the /sys/class/net/wlan0 (operstate, carrier) tuple and re-run nmcli only when that tuple
   changes or every 30 s, invalidating from ensure_setup_ap/stop_setup_ap.
-  Step 4: remeasure after 2 and 3, release, PR upstream. The 380 MB RSS itself (surface caches) makes any fork expensive and is a
+  Step 4 DONE: remeasured (above), released, PR branch perf/probe-sysfs-gates on the fork. The 380 MB RSS itself (surface caches) makes any fork expensive and is a
   separate item.
+- Settings reload stalls the sweep for 1.5 s (seen 2026-11-03, FRAME_DEBUG stall dumps: loop_settings=1560 ms,
+  gap 1.6 s, twice in 30 min, each right after a portal action rewrote round_touch_settings.json).
+  _apply_reloaded_settings runs on the main thread and rebuilds the radar layer inline (2_inline_rebuild 229 ms,
+  2r_f_icons 211 ms) plus whatever else the reload touches. Move the heavy parts to the prewarm worker or
+  split the reload across frames; measure which settings keys trigger the full rebuild.
 - 2r_bezel still averages 5 ms per rebuild: apply_round_bezel band blits plus the HUD overlay once a minute
   (pills and text are cached now; the clock string is a fresh render each minute by nature).
 - 2r_flights 8 to 9 ms per rebuild (max 19) with about 12 targets: trail drawing and tag placement.
