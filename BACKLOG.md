@@ -73,7 +73,9 @@ Still open, in priority order:
   changes or every 30 s, invalidating from ensure_setup_ap/stop_setup_ap.
   Step 4 DONE: remeasured (above), released, PR branch perf/probe-sysfs-gates on the fork. The 380 MB RSS itself (surface caches) makes any fork expensive and is a
   separate item.
-- Settings reload stalls the sweep for 1.5 s (seen 2026-11-03, FRAME_DEBUG stall dumps: loop_settings=1560 ms,
+- DONE 2026-11-03 (reload key groups, scope="audio" reload hint, weather fetch on a worker; six portal connect
+  calls: loop_settings 1630 ms worst to 9 ms, stall dumps 1 to 0, jank over 99 ms 8.5 to 1.9 per minute).
+  Original note: settings reload stalls the sweep for 1.5 s (seen 2026-11-03, FRAME_DEBUG stall dumps: loop_settings=1560 ms,
   gap 1.6 s, twice in 30 min, each right after a portal action rewrote round_touch_settings.json).
   _apply_reloaded_settings runs on the main thread and rebuilds the radar layer inline (2_inline_rebuild 229 ms,
   2r_f_icons 211 ms) plus whatever else the reload touches. Move the heavy parts to the prewarm worker or
@@ -90,7 +92,11 @@ Still open, in priority order:
 Next work item after the GIL / fork stall work above: an auto-dim feature to protect the round panel from burn-in.
 Today the app has a manual brightness slider (backlight.apply_percent: sysfs backlight when present, else X11 DPMS
 for off) and a scheduled quiet-hours dim (quiet_dim_enabled / quiet_dim_percent). There is no activity-based dim,
-no idle screen-off and no static-pixel protection. Candidates to decide between before implementing:
+no idle screen-off and no static-pixel protection.
+DECIDED 2026-11-03, in this order: (a) fix the settings reload stall first (new settings will trigger that reload);
+(b) idle auto-dim AND idle screen-off, each independently enabled with its own timeout, both restoring full
+brightness on a tap; (c) pixel shift; (d) the 380 MB resident size investigation. Static element fade and ambient
+light following are skipped. Original candidate list:
 
 - Idle auto-dim: dim to a configurable level after N minutes without touch or a tracked event, restore on touch.
   The Pi panel exposes a sysfs backlight (/sys/class/backlight/10-0045, 0 to 255), so dimming is a hardware
