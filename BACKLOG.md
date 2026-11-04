@@ -99,7 +99,12 @@ brightness on a tap; (c) pixel shift; (d) the 380 MB resident size investigation
 light following are skipped.
 (b) DONE 2026-11-03: idle_dim_* and idle_off_* settings, device rows on Settings > Display, portal Display card,
 six locales (catalogue revision 27), tests/test_idle_display_protection.py. Idle means no touch; the wake tap on a
-blanked panel is swallowed. Next: (c) pixel shift, then (d) the 380 MB RSS investigation. Original candidate list:
+blanked panel is swallowed. Verified on the Pi 2026-11-03/04 with 1 min dim 20% and 2 min off: backlight 255 to
+51 at 1 min, 0 with bl_power 4 at 2 min, journal "Idle 2 min: display off until the next touch"; the morning tap
+restored full brightness (the two timers re-fired exactly 1 and 2 min after it) and acted on nothing. Noticed in
+passing: about 30 s after the blank the kernel reports bl_power back at 0 while brightness stays 0 (panel stays
+dark; the manual screen-off path behaves the same, so not ours). Next: (c) pixel shift, then (d) the 380 MB RSS
+investigation. Original candidate list:
 
 - Idle auto-dim: dim to a configurable level after N minutes without touch or a tracked event, restore on touch.
   The Pi panel exposes a sysfs backlight (/sys/class/backlight/10-0045, 0 to 255), so dimming is a hardware
@@ -114,3 +119,11 @@ blanked panel is swallowed. Next: (c) pixel shift, then (d) the 380 MB RSS inves
   sunrise/sunset curve from the home location (already known) as a proxy.
 - Portal and on-screen settings for all of the above, kept in sync (settings.py option lists plus web/app.py and
   index.html), with the catalogue strings in all six locales.
+
+## Log noise (noticed 2026-11-04)
+
+With the speaker off and ATC enabled, the journal repeats every 30 s "ATC resuming - quiet hours ended" followed by
+"ATC deferred - no USB/Bluetooth speaker": the resume path re-announces on every tick instead of once per
+transition. The speaker reconnect loop also logs "offline, reconnecting" from both processes (display and portal)
+on every attempt at the 32 s backoff ceiling. Both are cosmetic; the fix is a state latch so each message logs once
+per transition.
