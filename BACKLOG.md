@@ -109,7 +109,7 @@ picture walks the perimeter of a square of half-side theme.s(1) (2 px on the 720
 (rotation.set_pixel_shift, applied in both present paths and undone in to_logical so touches still land); each
 step repaints the full frame once. Verified on the Pi with X11 screenshots (sudo scrot with admin's Xauthority,
 DISPLAY=:0): symmetric 6 px bezel border before, picture offset by exactly the first path step after one interval.
-(d) IN PROGRESS 2026-11-04: measured from inside the process with the new SIGUSR1 memory report
+(d) FIRST PASS DONE 2026-11-04 (release 2026.11.4.17): measured from inside the process with the new SIGUSR1 memory report
 (display/round_touch/mem_debug.py, FLIGHTSCNR_MEM_DEBUG=1 adds tracemalloc). Display at 380 MB RSS = 86 MB
 file-backed (libLLVM 42 MB via the Mesa GL stack, gallium 12 MB, python, libcrypto, curl_cffi, numpy, SDL) plus
 294 MB private anonymous heap: pygame surfaces reachable from module globals and the app total 78 MB (map_bg
@@ -128,6 +128,12 @@ grpc/curl C buffers, PIL, glibc arena slack); mallinfo2 / malloc_trim numbers wo
 probe. Also worth a look: map_bg keeps 8 basemap surfaces (28 MB) for scales not on screen. Side effect of the
 report: tracemalloc mode itself adds about 150 MB RSS and the report takes 23 s with it on, leave it off in
 normal use.
+Live result on the Pi with the packed stores (release .17, same tracemalloc report 3 min after start): Python heap
+89 to 32 MB (json.decoder 75 to 8 MB, the rest is settings / airlines / icao_types JSON), parse peak 160 to
+68 MB, report 23 to 4 s. Plain process (tracemalloc off) 3 min after start: 352 MB RSS, 266 MB anon, against 380 /
+294 MB before at 1 h 48 min uptime; surfaces reachable at report time were 104 MB this run against 78 MB in the
+first (more icons cached), so the like-for-like saving is the heap number, not the RSS delta. Remeasure RSS after
+a few hours for the BACKLOG record.
 Original candidate list:
 
 - Idle auto-dim: dim to a configurable level after N minutes without touch or a tracked event, restore on touch.
