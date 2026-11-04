@@ -109,7 +109,26 @@ picture walks the perimeter of a square of half-side theme.s(1) (2 px on the 720
 (rotation.set_pixel_shift, applied in both present paths and undone in to_logical so touches still land); each
 step repaints the full frame once. Verified on the Pi with X11 screenshots (sudo scrot with admin's Xauthority,
 DISPLAY=:0): symmetric 6 px bezel border before, picture offset by exactly the first path step after one interval.
-Next: (d) the 380 MB RSS investigation. Original candidate list:
+(d) IN PROGRESS 2026-11-04: measured from inside the process with the new SIGUSR1 memory report
+(display/round_touch/mem_debug.py, FLIGHTSCNR_MEM_DEBUG=1 adds tracemalloc). Display at 380 MB RSS = 86 MB
+file-backed (libLLVM 42 MB via the Mesa GL stack, gallium 12 MB, python, libcrypto, curl_cffi, numpy, SDL) plus
+294 MB private anonymous heap: pygame surfaces reachable from module globals and the app total 78 MB (map_bg
+_surfaces 28 MB for 8 basemaps, 13 to 14 full-frame 720x720x4 layers 2 MB each, radar _icon_state 9 MB,
+rotation _rot_sprite_cache 5 MB, the rest small caches), Python objects 89 MB by tracemalloc of which 75 MB was
+json.decoder output in 1.2 million blocks: the four local databases (airports.json 15 MB on disk became 57 MB
+of dicts for 95k records, cities 13 MB, runways 9 MB, faa 6 MB). Converting the dicts after json.load does not
+return the memory (pymalloc arenas stay fragmented: 89 MB before, 82 MB after malloc_trim on the Pi), so the
+loaders now stream the cache text record by record into packed array and byte-blob stores
+(utilities/compact_store.py, AirportStore / CityStore / RunwayStore / FaaStore): the four databases cost 21 MB
+after trim instead of 85 MB, iter_airports_near drops from 23 to 3 ms, icao_to_iata from 3 ms to microseconds,
+answers identical to the dict scan on real data. The airports build takes 3 s on the Pi (was 0.7 s json.load),
+so app.run() preloads all four on a daemon thread. Unaccounted after this: about 125 MB of anonymous heap that
+is neither reachable surfaces nor tracemalloc-visible Python objects (SDL_ttf glyph caches, mixer sounds,
+grpc/curl C buffers, PIL, glibc arena slack); mallinfo2 / malloc_trim numbers would split that and are the next
+probe. Also worth a look: map_bg keeps 8 basemap surfaces (28 MB) for scales not on screen. Side effect of the
+report: tracemalloc mode itself adds about 150 MB RSS and the report takes 23 s with it on, leave it off in
+normal use.
+Original candidate list:
 
 - Idle auto-dim: dim to a configurable level after N minutes without touch or a tracked event, restore on touch.
   The Pi panel exposes a sysfs backlight (/sys/class/backlight/10-0045, 0 to 255), so dimming is a hardware
