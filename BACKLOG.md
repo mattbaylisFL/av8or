@@ -96,7 +96,10 @@ no idle screen-off and no static-pixel protection.
 DECIDED 2026-11-03, in this order: (a) fix the settings reload stall first (new settings will trigger that reload);
 (b) idle auto-dim AND idle screen-off, each independently enabled with its own timeout, both restoring full
 brightness on a tap; (c) pixel shift; (d) the 380 MB resident size investigation. Static element fade and ambient
-light following are skipped. Original candidate list:
+light following are skipped.
+(b) DONE 2026-11-03: idle_dim_* and idle_off_* settings, device rows on Settings > Display, portal Display card,
+six locales (catalogue revision 27), tests/test_idle_display_protection.py. Idle means no touch; the wake tap on a
+blanked panel is swallowed. Next: (c) pixel shift, then (d) the 380 MB RSS investigation. Original candidate list:
 
 - Idle auto-dim: dim to a configurable level after N minutes without touch or a tracked event, restore on touch.
   The Pi panel exposes a sysfs backlight (/sys/class/backlight/10-0045, 0 to 255), so dimming is a hardware
