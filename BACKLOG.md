@@ -103,8 +103,13 @@ blanked panel is swallowed. Verified on the Pi 2026-11-03/04 with 1 min dim 20% 
 51 at 1 min, 0 with bl_power 4 at 2 min, journal "Idle 2 min: display off until the next touch"; the morning tap
 restored full brightness (the two timers re-fired exactly 1 and 2 min after it) and acted on nothing. Noticed in
 passing: about 30 s after the blank the kernel reports bl_power back at 0 while brightness stays 0 (panel stays
-dark; the manual screen-off path behaves the same, so not ours). Next: (c) pixel shift, then (d) the 380 MB RSS
-investigation. Original candidate list:
+dark; the manual screen-off path behaves the same, so not ours).
+(c) DONE 2026-11-04: pixel_shift_enabled / pixel_shift_minutes (1, 2, 5, 10, 15; default off, 5 min). The whole
+picture walks the perimeter of a square of half-side theme.s(1) (2 px on the 720 panel) one pixel per step
+(rotation.set_pixel_shift, applied in both present paths and undone in to_logical so touches still land); each
+step repaints the full frame once. Verified on the Pi with X11 screenshots (sudo scrot with admin's Xauthority,
+DISPLAY=:0): symmetric 6 px bezel border before, picture offset by exactly the first path step after one interval.
+Next: (d) the 380 MB RSS investigation. Original candidate list:
 
 - Idle auto-dim: dim to a configurable level after N minutes without touch or a tracked event, restore on touch.
   The Pi panel exposes a sysfs backlight (/sys/class/backlight/10-0045, 0 to 255), so dimming is a hardware
@@ -127,3 +132,10 @@ With the speaker off and ATC enabled, the journal repeats every 30 s "ATC resumi
 transition. The speaker reconnect loop also logs "offline, reconnecting" from both processes (display and portal)
 on every attempt at the 32 s backoff ceiling. Both are cosmetic; the fix is a state latch so each message logs once
 per transition.
+
+## Time-dependent test failures (noticed 2026-11-04)
+
+tests/test_open_meteo_weather.py: 9 tests pass in the evening (21:00 ET on 2026-11-03) and fail in the morning
+(07:15 ET on 2026-11-04) on the same commit, with the forecast fixture yielding 2 days instead of 3. Looks like a
+local-date versus UTC-date boundary in the forecast day pruning or the fixture's dates; needs a frozen clock in the
+test. Not related to any display work.
