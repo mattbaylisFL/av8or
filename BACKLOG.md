@@ -141,6 +141,14 @@ json.load parse peak of about 160 MB has not been trimmed back yet at 3 min). Re
 94976 airport records, 11335 runway idents and 22046 FAA idents all identical to the json.load dicts, nearby-airport
 lists identical for five regions at three size tiers (dict scan 140 ms, packed 17 ms), icao_to_iata identical for
 ten codes, nearest city identical for five points (190 ms to 90 ms). Fork branch perf/packed-local-databases-rebased.
+BOOT TIMING 2026-11-06, same Pi, upstream 3b3a001 against the PR branch 618b7d6, three alternating restarts each,
+timed from systemd start: radar visible at 13.9 to 15.6 s in both builds (the disclaimer holds the screen about
+10.8 s after the display starts); radar airports drawn at 15.4 to 18.3 s upstream against 14.7 to 16.4 s with the PR;
+the preload finishes 6.4 to 7.0 s after the display starts (airports 4.3 to 4.7 s, cities 1.0, runways 0.6 to 0.7,
+FAA 0.5), so about 6.5 s of one core at boot against about 1.1 s on demand upstream, which never loaded cities or
+FAA in the first minute; worst frame gap in the first 30 s of radar 2.2 to 3.4 s upstream against 1.4 to 1.6 s with
+the PR (consistent with json.load on the overlay worker holding the GIL, not attributed directly). Not measured: a
+first-boot user tapping the disclaimer at once, where the airport overlay would wait for the build, up to about 4 s.
 Original candidate list:
 
 - Idle auto-dim: dim to a configurable level after N minutes without touch or a tracked event, restore on touch.
