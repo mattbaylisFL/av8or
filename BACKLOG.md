@@ -134,6 +134,13 @@ Live result on the Pi with the packed stores (release .17, same tracemalloc repo
 294 MB before at 1 h 48 min uptime; surfaces reachable at report time were 104 MB this run against 78 MB in the
 first (more icons cached), so the like-for-like saving is the heap number, not the RSS delta. Remeasure RSS after
 a few hours for the BACKLOG record.
+RETEST 2026-11-06 on upstream 2026.11.6.1 as the base, same Pi, both builds restarted and read at 3 min uptime
+from /proc/<pid>/smaps_rollup: plain upstream RSS 520 MB / 434 MB anonymous, with the packed stores 437 MB / 352 MB,
+so 83 MB less on an identical base and uptime (the early figure is larger than the long-run saving because the
+json.load parse peak of about 160 MB has not been trimmed back yet at 3 min). Real-cache equivalence on the device:
+94976 airport records, 11335 runway idents and 22046 FAA idents all identical to the json.load dicts, nearby-airport
+lists identical for five regions at three size tiers (dict scan 140 ms, packed 17 ms), icao_to_iata identical for
+ten codes, nearest city identical for five points (190 ms to 90 ms). Fork branch perf/packed-local-databases-rebased.
 Original candidate list:
 
 - Idle auto-dim: dim to a configurable level after N minutes without touch or a tracked event, restore on touch.
