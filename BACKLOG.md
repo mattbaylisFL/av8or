@@ -165,6 +165,10 @@ gaps over 48 ms). Trim off: 30.5 gaps over 66 ms per minute, 6.1 over 100 ms, Rs
 with a trim. So roughly one in three trims costs one frame; at 600 s that is about one extra frame every 30 min, for
 ~50 MB less anon. MALLOC_ARENA_MAX / M_TRIM_THRESHOLD not tried; only worth it if the trim cost grows.
 The baseline itself is noisy (30 gaps over 66 ms a minute in daytime traffic): a separate item for the sweep work.
+UPSTREAM 2026-11-07: the trim is staged as fork branch perf/periodic-malloc-trim (standalone heap_trim.py, started
+from App.run, so it does not depend on the open packed-DB PR that adds mem_debug.py); av8or now uses the same module
+(release 2026.11.7.15, Pi: 60.3 MB back in 11 ms on the first pass). Log latches staged as fix/log-once-per-episode.
+The sampler and C heap report lines can follow upstream once the packed-DB PR (which carries mem_debug.py) merges.
 RETEST 2026-11-06 on upstream 2026.11.6.1 as the base, same Pi, both builds restarted and read at 3 min uptime
 from /proc/<pid>/smaps_rollup: plain upstream RSS 520 MB / 434 MB anonymous, with the packed stores 437 MB / 352 MB,
 so 83 MB less on an identical base and uptime (the early figure is larger than the long-run saving because the
