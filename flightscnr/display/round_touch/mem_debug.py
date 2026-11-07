@@ -26,13 +26,8 @@ use, free inside the arenas, mmapped blocks) and what ``malloc_trim`` hands
 back, which splits the anonymous memory that is neither surfaces nor Python
 objects. ``FLIGHTSCNR_MEM_SAMPLE_S=<seconds>`` adds one cheap line per
 interval (/proc and mallinfo2 only, no walks) for watching growth over hours.
-
-glibc does not hand freed arena space back on its own, so over a day the
-display's anonymous memory creeps up by ~60 to 90 MB of free-but-held heap
-(measured on a Pi 4B: in-use flat, arena free 89 to 158 MB overnight). A
-daemon thread calls ``malloc_trim(0)`` every ``FLIGHTSCNR_MALLOC_TRIM_S``
-seconds (default 600, 0 turns it off). The ctypes call releases the GIL, so
-the main loop keeps drawing while the kernel takes the pages back (~15 ms).
+The periodic trim itself lives in ``heap_trim``; the sample line shows its
+pass count and the total it has given back.
 """
 
 from __future__ import annotations
@@ -43,7 +38,6 @@ import gc
 import logging
 import os
 import sys
-import threading
 import time
 from collections import Counter, defaultdict
 
@@ -83,79 +77,12 @@ def requested() -> bool:
     return _requested
 
 
-def _trim_interval() -> float:
-    try:
-        return max(0.0, float(os.environ.get("FLIGHTSCNR_MALLOC_TRIM_S", "600") or 0))
-    except ValueError:
-        return 600.0
-
-
-TRIM_S = _trim_interval()
-_trim_thread: threading.Thread | None = None
-_trim_stop = threading.Event()
-_trim_count = 0
-_trim_back_kb = 0
-
-
-def trim_once() -> tuple[int, float] | None:
-    """One malloc_trim(0). Returns (RssAnon kB given back, ms) or None off glibc."""
-    global _trim_count, _trim_back_kb
-    lib = _glibc()
-    if lib is None:
-        return None
-    before = _proc_status_kb().get("RssAnon", 0)
-    t0 = time.perf_counter()
-    lib.malloc_trim(0)
-    took = (time.perf_counter() - t0) * 1000
-    back = max(0, before - _proc_status_kb().get("RssAnon", 0))
-    _trim_count += 1
-    _trim_back_kb += back
-    return back, took
-
-
-def _trim_loop(interval: float, stop: threading.Event) -> None:
-    first = True
-    while not stop.wait(interval):
-        try:
-            result = trim_once()
-        except Exception:
-            logger.debug("[mem] periodic malloc_trim failed", exc_info=True)
-            continue
-        if result is None:
-            return
-        back, took = result
-        log = logger.info if first else logger.debug
-        log("[mem] periodic malloc_trim (every %.0f s): %.1f MB back in %.0f ms",
-            interval, back / 1024, took)
-        first = False
-
-
-def start_trimmer(interval: float | None = None) -> bool:
-    """Start the periodic trim thread once. Returns True when it is running."""
-    global _trim_thread
-    interval = TRIM_S if interval is None else interval
-    if _trim_thread is not None:
-        return _trim_thread.is_alive()
-    if interval <= 0 or _glibc() is None:
-        _trim_thread = threading.Thread()  # sentinel: decided, not running
-        return False
-    _trim_thread = threading.Thread(
-        target=_trim_loop, args=(interval, _trim_stop),
-        name="malloc-trim", daemon=True,
-    )
-    _trim_thread.start()
-    return True
-
-
 def maybe_report(app=None) -> bool:
     """Run and log the report if one was requested. Returns True when it ran.
 
-    Also logs the periodic sample line when ``FLIGHTSCNR_MEM_SAMPLE_S`` is set,
-    and starts the periodic malloc_trim thread on the first call.
+    Also logs the periodic sample line when ``FLIGHTSCNR_MEM_SAMPLE_S`` is set.
     """
     global _requested
-    if _trim_thread is None:
-        start_trimmer()
     maybe_sample()
     if not _requested:
         return False
@@ -286,8 +213,10 @@ def sample_line() -> str:
             f"c_mmap={_mb(stats['mmap'])}MB",
         ]
     parts.append(f"py_blocks={sys.getallocatedblocks()}")
-    if _trim_count:
-        parts.append(f"trims={_trim_count} trim_back={_trim_back_kb / 1024:.1f}MB")
+    from display.round_touch import heap_trim
+
+    if heap_trim.trim_count:
+        parts.append(f"trims={heap_trim.trim_count} trim_back={heap_trim.trim_back_kb / 1024:.1f}MB")
     return " ".join(parts)
 
 

@@ -35,6 +35,7 @@ from display.round_touch import (
     follow_overlays,
     frame_debug,
     flap_sound,
+    heap_trim,
     mem_debug,
     ghost_touch_filter,
     gesture_handler,
@@ -6760,6 +6761,9 @@ class RoundTouchDisplay:
         gc.collect()
         gc.freeze()
         self._install_signal_handlers()
+        # glibc keeps freed heap in its arenas; hand it back every 10 min so
+        # the kiosk does not creep up on 1-2 GB Pis (FLIGHTSCNR_MALLOC_TRIM_S).
+        heap_trim.start()
         _preload_local_databases()
 
         logger.info(

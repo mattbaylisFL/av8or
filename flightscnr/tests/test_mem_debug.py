@@ -14,8 +14,6 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
-import threading
-import time
 import types
 import unittest
 from pathlib import Path
@@ -150,83 +148,19 @@ class CHeapAndSamplerTests(unittest.TestCase):
                 os.environ.pop("FLIGHTSCNR_MEM_SAMPLE_S", None)
 
 
-class PeriodicTrimTests(unittest.TestCase):
-    def setUp(self):
-        self._saved = (mem_debug._libc, mem_debug._libc_checked, mem_debug._trim_thread,
-                       mem_debug._trim_stop, mem_debug._trim_count, mem_debug._trim_back_kb)
-        self.lib = _FakeLibc()
-        mem_debug._libc, mem_debug._libc_checked = self.lib, True
-        mem_debug._trim_thread = None
-        mem_debug._trim_stop = threading.Event()
-        mem_debug._trim_count = mem_debug._trim_back_kb = 0
 
-    def tearDown(self):
-        mem_debug._trim_stop.set()
-        if mem_debug._trim_thread is not None and mem_debug._trim_thread.is_alive():
-            mem_debug._trim_thread.join(timeout=2)
-        (mem_debug._libc, mem_debug._libc_checked, mem_debug._trim_thread,
-         mem_debug._trim_stop, mem_debug._trim_count, mem_debug._trim_back_kb) = self._saved
+class SampleLineTrimTests(unittest.TestCase):
+    def test_sample_line_shows_heap_trim_passes(self):
+        from display.round_touch import heap_trim
 
-    def test_trim_once_counts_and_shows_in_sample_line(self):
-        self.assertNotIn("trims=", mem_debug.sample_line())
-        back, took = mem_debug.trim_once()
-        self.assertGreaterEqual(back, 0)
-        self.assertGreaterEqual(took, 0)
-        self.assertEqual(self.lib.trims, 1)
-        self.assertIn("trims=1 trim_back=", mem_debug.sample_line())
-
-    def test_trim_once_off_glibc_is_none(self):
-        mem_debug._libc = None
-        self.assertIsNone(mem_debug.trim_once())
-
-    def test_zero_interval_or_no_glibc_never_starts(self):
-        self.assertFalse(mem_debug.start_trimmer(0))
-        self.assertFalse(mem_debug._trim_thread.is_alive())
-        mem_debug._trim_thread = None
-        mem_debug._libc = None
-        self.assertFalse(mem_debug.start_trimmer(600))
-        # Decided once: a later call does not retry.
-        mem_debug._libc = self.lib
-        self.assertFalse(mem_debug.start_trimmer(600))
-
-    def test_thread_trims_on_interval_and_logs_first_pass_at_info(self):
-        with self.assertLogs("flightscnr.display", level="DEBUG") as logs:
-            self.assertTrue(mem_debug.start_trimmer(0.01))
-            self.assertTrue(mem_debug.start_trimmer(0.01))  # idempotent
-            for _ in range(200):
-                if self.lib.trims >= 3:
-                    break
-                time.sleep(0.01)
-            mem_debug._trim_stop.set()
-            mem_debug._trim_thread.join(timeout=2)
-        self.assertGreaterEqual(self.lib.trims, 3)
-        trims = [r for r in logs.records if "periodic malloc_trim" in r.getMessage()]
-        self.assertEqual(trims[0].levelname, "INFO")
-        self.assertTrue(all(r.levelname == "DEBUG" for r in trims[1:]))
-        self.assertEqual(mem_debug._trim_thread.name, "malloc-trim")
-        self.assertTrue(mem_debug._trim_thread.daemon)
-
-    def test_maybe_report_starts_the_trimmer_once(self):
-        calls = []
-        orig = mem_debug.start_trimmer
-        mem_debug.start_trimmer = lambda interval=None: calls.append(interval) or False
+        saved = (heap_trim.trim_count, heap_trim.trim_back_kb)
         try:
-            mem_debug.maybe_report()
-            mem_debug._trim_thread = threading.Thread()
-            mem_debug.maybe_report()
+            heap_trim.trim_count, heap_trim.trim_back_kb = 0, 0
+            self.assertNotIn("trims=", mem_debug.sample_line())
+            heap_trim.trim_count, heap_trim.trim_back_kb = 3, 2048
+            self.assertIn("trims=3 trim_back=2.0MB", mem_debug.sample_line())
         finally:
-            mem_debug.start_trimmer = orig
-        self.assertEqual(calls, [None])
-
-    def test_trim_interval_parsing(self):
-        for raw, want in (("600", 600.0), ("0", 0.0), ("-1", 0.0), ("soon", 600.0), ("", 0.0)):
-            os.environ["FLIGHTSCNR_MALLOC_TRIM_S"] = raw
-            try:
-                self.assertEqual(mem_debug._trim_interval(), want)
-            finally:
-                os.environ.pop("FLIGHTSCNR_MALLOC_TRIM_S", None)
-        self.assertEqual(mem_debug._trim_interval(), 600.0)
-
+            heap_trim.trim_count, heap_trim.trim_back_kb = saved
 
 if __name__ == "__main__":
     unittest.main()
