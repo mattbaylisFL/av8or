@@ -134,6 +134,10 @@ Live result on the Pi with the packed stores (release .17, same tracemalloc repo
 294 MB before at 1 h 48 min uptime; surfaces reachable at report time were 104 MB this run against 78 MB in the
 first (more icons cached), so the like-for-like saving is the heap number, not the RSS delta. Remeasure RSS after
 a few hours for the BACKLOG record.
+OVERNIGHT RUN started 2026-11-06 22:00 ET on 2026.11.7.10: FLIGHTSCNR_MEM_SAMPLE_S=900 in /etc/flightscnr.env
+(backup /etc/flightscnr.env.bak-2026-11-06) logs "[mem] sample" lines with RSS, anon and glibc in-use / free every
+15 min; the SIGUSR1 report now ends with mallinfo2 and a malloc_trim(0) result. Read the curve first, then send one
+SIGUSR1 (it trims, so it resets the comparison). Pi auto-update is off (update-notify.json), so pushes do not restart it.
 RETEST 2026-11-06 on upstream 2026.11.6.1 as the base, same Pi, both builds restarted and read at 3 min uptime
 from /proc/<pid>/smaps_rollup: plain upstream RSS 520 MB / 434 MB anonymous, with the packed stores 437 MB / 352 MB,
 so 83 MB less on an identical base and uptime (the early figure is larger than the long-run saving because the
@@ -167,6 +171,12 @@ Original candidate list:
 
 ## Log noise (noticed 2026-11-04)
 
+DONE 2026-11-06 (release 2026.11.7.10, tests/test_log_latches.py): "ATC resuming", "ATC deferred" and the
+Bluetooth "offline, reconnecting" now log at info once per episode and at debug after that; the retries are
+unchanged, and "Bluetooth speaker <mac> connected" marks the end of an outage. On the Pi each logged once after the
+restart and then nothing for 8 minutes (before: all three every 30 to 40 s). Still noisy: "[ais] snapshot: N
+vessels" every 10 s at info; a latch on the counts (log on change, or once a minute) would quiet it.
+Original note:
 With the speaker off and ATC enabled, the journal repeats every 30 s "ATC resuming - quiet hours ended" followed by
 "ATC deferred - no USB/Bluetooth speaker": the resume path re-announces on every tick instead of once per
 transition. The speaker reconnect loop also logs "offline, reconnecting" from both processes (display and portal)
