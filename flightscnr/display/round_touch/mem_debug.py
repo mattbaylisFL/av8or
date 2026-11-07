@@ -20,10 +20,18 @@ import so the report can also list the Python allocations by file.
 The signal handler only sets a flag; the report runs from the main loop on
 the next tick (``maybe_report``) and logs through the normal logger. It is a
 diagnostic, so it is allowed to take a moment and freeze the sweep once.
+
+The report also gives the C heap as glibc sees it (``mallinfo2``: bytes in
+use, free inside the arenas, mmapped blocks) and what ``malloc_trim`` hands
+back, which splits the anonymous memory that is neither surfaces nor Python
+objects. ``FLIGHTSCNR_MEM_SAMPLE_S=<seconds>`` adds one cheap line per
+interval (/proc and mallinfo2 only, no walks) for watching growth over hours.
 """
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import gc
 import logging
 import os
@@ -41,6 +49,18 @@ if TRACE:
 
 _requested = False
 
+
+def _sample_interval() -> float:
+    try:
+        return max(0.0, float(os.environ.get("FLIGHTSCNR_MEM_SAMPLE_S", "") or 0))
+    except ValueError:
+        return 0.0
+
+
+SAMPLE_S = _sample_interval()
+_T0 = time.monotonic()
+_next_sample = _T0 + SAMPLE_S
+
 _MAX_DEPTH = 6
 _MODULE_PREFIXES = ("display.", "utilities.", "web.")
 
@@ -56,8 +76,12 @@ def requested() -> bool:
 
 
 def maybe_report(app=None) -> bool:
-    """Run and log the report if one was requested. Returns True when it ran."""
+    """Run and log the report if one was requested. Returns True when it ran.
+
+    Also logs the periodic sample line when ``FLIGHTSCNR_MEM_SAMPLE_S`` is set.
+    """
     global _requested
+    maybe_sample()
     if not _requested:
         return False
     _requested = False
@@ -79,6 +103,131 @@ def _rss_lines() -> list[str]:
     except OSError:
         pass
     return out
+
+
+def _proc_status_kb() -> dict[str, int]:
+    out: dict[str, int] = {}
+    try:
+        with open("/proc/self/status", encoding="ascii", errors="replace") as fh:
+            for line in fh:
+                key, _, rest = line.partition(":")
+                parts = rest.split()
+                if key in ("VmRSS", "RssAnon", "RssFile", "VmSwap", "Threads") and parts:
+                    out[key] = int(parts[0])
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+class _MallInfo2(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_size_t) for name in (
+        "arena", "ordblks", "smblks", "hblks", "hblkhd",
+        "usmblks", "fsmblks", "uordblks", "fordblks", "keepcost",
+    )]
+
+
+_libc = None
+_libc_checked = False
+
+
+def _glibc():
+    """The C library when it is glibc 2.33+ (mallinfo2), else None."""
+    global _libc, _libc_checked
+    if not _libc_checked:
+        _libc_checked = True
+        try:
+            lib = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6")
+            lib.mallinfo2.restype = _MallInfo2
+            lib.mallinfo2.argtypes = []
+            lib.malloc_trim.restype = ctypes.c_int
+            lib.malloc_trim.argtypes = [ctypes.c_size_t]
+            _libc = lib
+        except (OSError, AttributeError):
+            _libc = None
+    return _libc
+
+
+def malloc_stats() -> dict[str, int] | None:
+    """glibc heap totals across all arenas, in bytes; None off glibc."""
+    lib = _glibc()
+    if lib is None:
+        return None
+    try:
+        mi = lib.mallinfo2()
+    except Exception:
+        return None
+    return {
+        "arena": mi.arena,        # sbrk and arena heap obtained from the OS
+        "mmap": mi.hblkhd,        # large blocks mmapped on their own
+        "in_use": mi.uordblks,    # bytes handed out and not freed
+        "free": mi.fordblks,      # free bytes kept inside the arenas
+        "top": mi.keepcost,       # trimmable free space at the heap top
+    }
+
+
+def _mb(nbytes: float) -> str:
+    return f"{nbytes / 1048576:.1f}"
+
+
+def malloc_lines(trim: bool = True) -> list[str]:
+    """C heap summary, and with ``trim`` what malloc_trim(0) gives back."""
+    stats = malloc_stats()
+    if stats is None:
+        return ["C heap: mallinfo2 not available (not glibc 2.33+)"]
+    lines = [
+        f"C heap: in use {_mb(stats['in_use'])} MB, free in arenas {_mb(stats['free'])} MB, "
+        f"arena {_mb(stats['arena'])} MB, mmapped {_mb(stats['mmap'])} MB, "
+        f"python blocks {sys.getallocatedblocks()}"
+    ]
+    if trim:
+        before = _proc_status_kb().get("RssAnon", 0)
+        t0 = time.perf_counter()
+        released = _glibc().malloc_trim(0)
+        took = (time.perf_counter() - t0) * 1000
+        after = _proc_status_kb().get("RssAnon", 0)
+        lines.append(
+            f"malloc_trim(0): RssAnon {before / 1024:.1f} to {after / 1024:.1f} MB "
+            f"({(before - after) / 1024:.1f} MB back, released={released}, {took:.0f} ms)"
+        )
+    return lines
+
+
+def sample_line() -> str:
+    """One cheap line for the periodic sampler: /proc and mallinfo2 only."""
+    st = _proc_status_kb()
+    parts = [
+        f"up={int(time.monotonic() - _T0)}s",
+        f"rss={st.get('VmRSS', 0) / 1024:.1f}MB",
+        f"anon={st.get('RssAnon', 0) / 1024:.1f}MB",
+        f"file={st.get('RssFile', 0) / 1024:.1f}MB",
+        f"swap={st.get('VmSwap', 0) / 1024:.1f}MB",
+        f"threads={st.get('Threads', 0)}",
+    ]
+    stats = malloc_stats()
+    if stats is not None:
+        parts += [
+            f"c_in_use={_mb(stats['in_use'])}MB",
+            f"c_free={_mb(stats['free'])}MB",
+            f"c_mmap={_mb(stats['mmap'])}MB",
+        ]
+    parts.append(f"py_blocks={sys.getallocatedblocks()}")
+    return " ".join(parts)
+
+
+def maybe_sample(now: float | None = None) -> bool:
+    """Log a sample line when the interval has passed. Returns True when it did."""
+    global _next_sample
+    if SAMPLE_S <= 0:
+        return False
+    now = time.monotonic() if now is None else now
+    if now < _next_sample:
+        return False
+    _next_sample = now + SAMPLE_S
+    try:
+        logger.info("[mem] sample %s", sample_line())
+    except Exception:
+        logger.debug("[mem] sample failed", exc_info=True)
+    return True
 
 
 def _surface_type():
@@ -223,5 +372,6 @@ def report(app=None) -> str:
     lines.extend(surface_report(app))
     lines.extend(gc_report())
     lines.extend(tracemalloc_report())
+    lines.extend(malloc_lines())
     lines.append(f"report took {(time.perf_counter() - t0) * 1000:.0f} ms")
     return "\n".join(lines)

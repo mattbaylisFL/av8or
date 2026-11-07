@@ -74,5 +74,79 @@ class WalkTests(unittest.TestCase):
         self.assertFalse(mem_debug.requested())
 
 
+class _FakeMallInfo:
+    arena, hblkhd, uordblks, fordblks, keepcost = 64 << 20, 8 << 20, 40 << 20, 24 << 20, 1 << 20
+
+
+class _FakeLibc:
+    def __init__(self):
+        self.trims = 0
+
+    def mallinfo2(self):
+        return _FakeMallInfo()
+
+    def malloc_trim(self, pad):
+        self.trims += 1
+        return 1
+
+
+class CHeapAndSamplerTests(unittest.TestCase):
+    def setUp(self):
+        self._saved = (mem_debug.SAMPLE_S, mem_debug._next_sample, mem_debug._libc,
+                       mem_debug._libc_checked)
+
+    def tearDown(self):
+        (mem_debug.SAMPLE_S, mem_debug._next_sample, mem_debug._libc,
+         mem_debug._libc_checked) = self._saved
+
+    def _fake_libc(self):
+        lib = _FakeLibc()
+        mem_debug._libc, mem_debug._libc_checked = lib, True
+        return lib
+
+    def test_malloc_lines_report_heap_and_trim(self):
+        lib = self._fake_libc()
+        lines = mem_debug.malloc_lines()
+        self.assertIn("in use 40.0 MB, free in arenas 24.0 MB", lines[0])
+        self.assertIn("mmapped 8.0 MB", lines[0])
+        self.assertTrue(lines[1].startswith("malloc_trim(0): RssAnon"))
+        self.assertEqual(lib.trims, 1)
+        self.assertEqual(len(mem_debug.malloc_lines(trim=False)), 1)
+        self.assertEqual(lib.trims, 1)
+
+    def test_without_glibc_the_report_says_so(self):
+        mem_debug._libc, mem_debug._libc_checked = None, True
+        self.assertIsNone(mem_debug.malloc_stats())
+        self.assertIn("not available", mem_debug.malloc_lines()[0])
+        self.assertNotIn("c_in_use", mem_debug.sample_line())
+
+    def test_sample_line_fields(self):
+        self._fake_libc()
+        line = mem_debug.sample_line()
+        for key in ("up=", "rss=", "anon=", "threads=", "c_in_use=40.0MB", "c_free=24.0MB",
+                    "py_blocks="):
+            self.assertIn(key, line)
+
+    def test_sampler_off_by_default_and_paced_when_set(self):
+        mem_debug.SAMPLE_S = 0.0
+        self.assertFalse(mem_debug.maybe_sample(now=1e9))
+        mem_debug.SAMPLE_S = 900.0
+        mem_debug._next_sample = 1000.0
+        with self.assertLogs("flightscnr.display", level="INFO") as logs:
+            self.assertFalse(mem_debug.maybe_sample(now=999.0))
+            self.assertTrue(mem_debug.maybe_sample(now=1000.0))
+            self.assertFalse(mem_debug.maybe_sample(now=1899.0))
+            self.assertTrue(mem_debug.maybe_sample(now=1900.0))
+        self.assertEqual(sum("[mem] sample" in m for m in logs.output), 2)
+
+    def test_interval_parsing(self):
+        for raw, want in (("", 0.0), ("900", 900.0), ("-5", 0.0), ("soon", 0.0)):
+            os.environ["FLIGHTSCNR_MEM_SAMPLE_S"] = raw
+            try:
+                self.assertEqual(mem_debug._sample_interval(), want)
+            finally:
+                os.environ.pop("FLIGHTSCNR_MEM_SAMPLE_S", None)
+
+
 if __name__ == "__main__":
     unittest.main()
