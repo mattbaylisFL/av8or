@@ -138,6 +138,23 @@ OVERNIGHT RUN started 2026-11-06 22:00 ET on 2026.11.7.10: FLIGHTSCNR_MEM_SAMPLE
 (backup /etc/flightscnr.env.bak-2026-11-06) logs "[mem] sample" lines with RSS, anon and glibc in-use / free every
 15 min; the SIGUSR1 report now ends with mallinfo2 and a malloc_trim(0) result. Read the curve first, then send one
 SIGUSR1 (it trims, so it resets the comparison). Pi auto-update is off (update-notify.json), so pushes do not restart it.
+OVERNIGHT RESULT 2026-11-07 (44 samples, 21:53 to 09:05, one process, 0 tracebacks): NO LEAK. Night (22:08 to
+05:53): anon 306 to 365 MB while glibc in-use stayed flat at 138 to 155 MB and py_blocks flat (640k to 720k); the
+whole rise was glibc free space inside the arenas ratcheting up, 89 to 158 MB (fragmentation, never handed back).
+06:08: anon fell 42 MB on its own (heap top trimmed after ATC resumed at 06:00). Day (07:23 on): in-use rose 140 to
+210 MB with traffic, which is live data, not slack: the 09:05 report showed 155 MB of reachable surface pixels,
+largest radar._icon_state 31 MB for 316 visible aircraft (about 100 KB per target, pruned to what is on screen by
+_prune_live_state, so bounded by traffic), map_bg 28 MB, _live_label_frame_cache 20 MB, _rot_sprite_cache 15 MB,
+radar_hud._pill_cache 15 MB. mallinfo2 at 09:05: in use 208.2 MB, free in arenas 158.6 MB, arena 366.8 MB,
+mmapped 4.3 MB. malloc_trim(0) took RssAnon 417.5 to 330.6 MB (87 MB back) in 15 ms.
+NEXT: a periodic malloc_trim(0) (every 10 to 15 min, glibc only, timed so the 15 ms lands outside a sweep frame or
+on a worker thread, then checked with FRAME_DEBUG for a stall) should hold anon near 330 MB instead of letting it
+creep to 400+. Alternatives to compare: MALLOC_ARENA_MAX=2 and a lower M_TRIM_THRESHOLD in the systemd unit.
+The sampler var is still in /etc/flightscnr.env for that A/B; remove it (restore the .bak) when done.
+Seen in the same journal: fr24 logs "no authentication provided, using anonymous access" 3 times every ~90 s,
+which suggests a new FR24 client (and maybe a new HTTP session and TLS handshake) per poll; and with the speaker
+offline bluetooth_audio still spawns "rfkill unblock bluetooth" every ~38 s (a fork each time, see the fork stall
+note); gating that on /sys/class/rfkill/*/soft would drop the spawn.
 RETEST 2026-11-06 on upstream 2026.11.6.1 as the base, same Pi, both builds restarted and read at 3 min uptime
 from /proc/<pid>/smaps_rollup: plain upstream RSS 520 MB / 434 MB anonymous, with the packed stores 437 MB / 352 MB,
 so 83 MB less on an identical base and uptime (the early figure is larger than the long-run saving because the
