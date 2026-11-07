@@ -150,11 +150,21 @@ mmapped 4.3 MB. malloc_trim(0) took RssAnon 417.5 to 330.6 MB (87 MB back) in 15
 NEXT: a periodic malloc_trim(0) (every 10 to 15 min, glibc only, timed so the 15 ms lands outside a sweep frame or
 on a worker thread, then checked with FRAME_DEBUG for a stall) should hold anon near 330 MB instead of letting it
 creep to 400+. Alternatives to compare: MALLOC_ARENA_MAX=2 and a lower M_TRIM_THRESHOLD in the systemd unit.
-The sampler var is still in /etc/flightscnr.env for that A/B; remove it (restore the .bak) when done.
+The sampler var was removed from /etc/flightscnr.env after the trim A/B (backup restored).
 Seen in the same journal: fr24 logs "no authentication provided, using anonymous access" 3 times every ~90 s,
 which suggests a new FR24 client (and maybe a new HTTP session and TLS handshake) per poll; and with the speaker
 offline bluetooth_audio still spawns "rfkill unblock bluetooth" every ~38 s (a fork each time, see the fork stall
 note); gating that on /sys/class/rfkill/*/soft would drop the spawn.
+PERIODIC TRIM DONE 2026-11-07 (release 2026.11.7.13, mem_debug.start_trimmer, FLIGHTSCNR_MALLOC_TRIM_S default
+600, 0 = off): a daemon thread calls malloc_trim(0) through ctypes, which drops the GIL. A/B on the Pi, same
+morning traffic, each phase read from 3 min after a restart, from the always-on hitch log (/tmp/flightscnr-hitch.log,
+gaps over 48 ms). Trim off: 30.5 gaps over 66 ms per minute, 6.1 over 100 ms, RssAnon 403 MB at 23 min. Trim every
+30 s (stress setting): 31.3 and 6.0 per minute, RssAnon 351 MB at 32 min, first pass gave back 48 MB in 6 ms,
+29 passes in 15 min. Folding the hitches on the trim period: the 0.25 s right after a trim held 20 small hitches
+(max 80 ms, one extra frame) against 13 and 7 in the same windows 10 s and 20 s later; nothing over 100 ms lined up
+with a trim. So roughly one in three trims costs one frame; at 600 s that is about one extra frame every 30 min, for
+~50 MB less anon. MALLOC_ARENA_MAX / M_TRIM_THRESHOLD not tried; only worth it if the trim cost grows.
+The baseline itself is noisy (30 gaps over 66 ms a minute in daytime traffic): a separate item for the sweep work.
 RETEST 2026-11-06 on upstream 2026.11.6.1 as the base, same Pi, both builds restarted and read at 3 min uptime
 from /proc/<pid>/smaps_rollup: plain upstream RSS 520 MB / 434 MB anonymous, with the packed stores 437 MB / 352 MB,
 so 83 MB less on an identical base and uptime (the early figure is larger than the long-run saving because the
