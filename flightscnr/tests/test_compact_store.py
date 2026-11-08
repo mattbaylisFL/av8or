@@ -184,14 +184,14 @@ class OtherStoreTests(unittest.TestCase):
             self.assertIsNone(faa_airports.lookup("KXXX"))
 
     def test_cities(self):
-        rows = [["Melbourne", 28.08, -80.61], ["Lambeth", 51.49, -0.12], ["Sydney", -33.87, 151.21]]
+        rows = [["Denver", 39.74, -104.99], ["Lambeth", 51.49, -0.12], ["Sydney", -33.87, 151.21]]
         store = cities.CityStore.from_rows(rows)
         self.assertEqual(len(store), 3)
         self.assertEqual(list(store)[1], rows[1])
         with mock.patch.object(cities, "_db", store), mock.patch.object(cities, "_loaded", True):
-            new = cities.get_nearest_city(28.1, -80.6)
+            new = cities.get_nearest_city(39.7, -105.0)
         with mock.patch.object(cities, "_db", rows), mock.patch.object(cities, "_loaded", True):
-            old = cities.get_nearest_city(28.1, -80.6)
+            old = cities.get_nearest_city(39.7, -105.0)
         self.assertEqual(new["name"], old["name"])
         self.assertAlmostEqual(new["distance_km"], old["distance_km"], places=6)
 

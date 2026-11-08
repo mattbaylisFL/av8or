@@ -55,12 +55,12 @@ def test_factory_reset_and_repair_default_to_av8or_repo():
 def test_seed_conf_parses_like_config_h(tmp_path):
     conf = tmp_path / "seed.conf"
     conf.write_text(
-        "// comment\nFR24_API_KEY = sub|jwt\nHOME_LAT = 28.5 // inline\n#define TOMORROW_API_KEY \"tk\"\n",
+        "// comment\nFR24_API_KEY = sub|jwt\nHOME_LAT = 47.6 // inline\n#define TOMORROW_API_KEY \"tk\"\n",
         encoding="utf-8",
     )
     assert av8or_seed.load_seed_conf(str(conf)) == {
         "FR24_API_KEY": "sub|jwt",
-        "HOME_LAT": "28.5",
+        "HOME_LAT": "47.6",
         "TOMORROW_API_KEY": "tk",
     }
 

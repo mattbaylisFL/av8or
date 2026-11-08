@@ -45,7 +45,7 @@ GOOD_SEG = {"le_lat": 41.9, "le_lon": -87.9, "he_lat": 41.95, "he_lon": -87.88, 
 GOOD_RUNWAYS = {"KORD": [GOOD_SEG, dict(GOOD_SEG, le_ident="04", he_ident="22", surface="turf")], "0J0": [dict(GOOD_SEG, length_ft=None)]}
 GOOD_RUNWAYS["0J0"][0].pop("length_ft")
 GOOD_FAA = {"KORD": {"fuel": True, "beacon": True, "towered": True}, "F70": {"fuel": False, "beacon": True, "towered": False}}
-GOOD_CITIES = [["Melbourne", 28.08, -80.61], ["Lambeth", 51.49, -0.12], ["", -33.87, 151.21]]
+GOOD_CITIES = [["Denver", 39.74, -104.99], ["Lambeth", 51.49, -0.12], ["", -33.87, 151.21]]
 
 
 class _Scratch:
@@ -147,7 +147,7 @@ class ConformingDataPacksTests(unittest.TestCase):
             db = sc.run(GOOD_CITIES)
             self.assertIsInstance(db, cities.CityStore)
             self.assertEqual(list(db), GOOD_CITIES)
-            self.assertEqual(cities.get_nearest_city(28.1, -80.6)["name"], "Melbourne")
+            self.assertEqual(cities.get_nearest_city(39.7, -105.0)["name"], "Denver")
 
 
 class StrictFormatFallsBackTests(unittest.TestCase):
@@ -222,16 +222,16 @@ class StrictFormatFallsBackTests(unittest.TestCase):
 
     def test_city_deviations(self):
         cases = [
-            ([["Melbourne", 28.08]], "not [name, lat, lon]"),
-            ([[None, 28.08, -80.61]], "not a string"),
-            ([["Melbourne", "28.08", -80.61]], "lat is str"),
-            ([["Melbourne", 28.08, -80.61, 123]], "not [name, lat, lon]"),
+            ([["Denver", 39.74]], "not [name, lat, lon]"),
+            ([[None, 39.74, -104.99]], "not a string"),
+            ([["Denver", "39.74", -104.99]], "lat is str"),
+            ([["Denver", 39.74, -104.99, 123]], "not [name, lat, lon]"),
         ]
         for payload, needle in cases:
             self._check(cities_scratch(), payload, needle)
         # A conforming row next to a bad one: the whole list stays plain (the
         # historical scan would raise on the bad row, exactly as before).
-        self._check(cities_scratch(), [["Melbourne", 28.08, -80.61], ["Lambeth", "51.49", -0.12]], "lat is str")
+        self._check(cities_scratch(), [["Denver", 39.74, -104.99], ["Lambeth", "51.49", -0.12]], "lat is str")
 
     def test_any_exception_while_packing_falls_back(self):
         with airports_scratch() as sc, mock.patch.object(airports.AirportStore, "from_items", side_effect=RuntimeError("boom")):

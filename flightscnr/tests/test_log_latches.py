@@ -106,15 +106,15 @@ class TestDeferredStart:
     def test_logs_deferral_once_per_feed(self, deferred_start, caplog):
         caplog.set_level(logging.DEBUG)
         for _ in range(3):
-            atc_audio.start(airport="KMCO", mount="feed_a")
+            atc_audio.start(airport="KSEA", mount="feed_a")
         assert len(_info(caplog, "ATC deferred")) == 1
         assert len(_debug(caplog, "ATC deferred")) == 2
-        atc_audio.start(airport="KMCO", mount="feed_b")
+        atc_audio.start(airport="KSEA", mount="feed_b")
         assert len(_info(caplog, "ATC deferred")) == 2
 
     def test_a_ready_speaker_rearms_the_message(self, deferred_start, monkeypatch, caplog):
         caplog.set_level(logging.INFO)
-        atc_audio.start(airport="KMCO", mount="feed_a")
+        atc_audio.start(airport="KSEA", mount="feed_a")
         deferred_start["value"] = True
 
         class Started(Exception):
@@ -125,10 +125,10 @@ class TestDeferredStart:
 
         monkeypatch.setattr(atc_audio, "_stop_locked", stop_locked)
         with pytest.raises(Started):
-            atc_audio.start(airport="KMCO", mount="feed_a")
+            atc_audio.start(airport="KSEA", mount="feed_a")
         assert atc_audio._deferred_logged is None
         deferred_start["value"] = False
-        atc_audio.start(airport="KMCO", mount="feed_a")
+        atc_audio.start(airport="KSEA", mount="feed_a")
         assert len(_info(caplog, "ATC deferred")) == 2
 
 
