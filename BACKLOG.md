@@ -224,9 +224,42 @@ Counters added (78b053a, release 2026.11.8.18), 7 min capture at 10:58 ET, about
 ~187 ms of worker CPU in ~585 ms wall (trails 114 ms CPU in 501 ms wall; ~118 yields x 2 ms = ~236 ms of sleep, the
 rest GIL waits). 55 of 95 trails drawn are for aircraft already off the display. The live icon pass refreshes ~10 of
 ~41 targets per frame and always hits its 6 ms budget (4L_update 6.9 ms), i.e. ~0.6 ms per target refresh.
-Next candidates: a 4 ms live icon budget (each target refreshed every ~6 frames instead of ~4; targets move under
+DONE da358bb (release 2026.11.8.20): live icon budget 6 to 4 ms. 7 min FRAME_DEBUG at ~83 targets against the
+2026.11.8.18 capture: 4L_live_frame 9.3 to 6.8 ms, 4_present 26.8 to 23.8, draw avg 32.3 to 28.0 ms, jank over
+99 ms 6.9 to 4.5 per minute. Hitch log, 8 min from 3 min uptime: gaps over 48 ms 64.9 per minute (earlier runs
+today 75 to 80), over 66 ms 21.4 (23 to 31), over 100 ms 5.2 (5.4 to 5.8). Remaining stutter is the layer rebuild
+(~160 to 190 ms worker CPU every ~4 s); classic mode below attacks that, and smooth mode could still gain from
+cheaper gone-aircraft trails.
+Earlier list of next candidates: a 4 ms live icon budget (each target refreshed every ~6 frames instead of ~4; targets move under
 1 px/s, so likely invisible, and it brings steady frames back under 33 ms); shorter fade or no full redraw for
 gone-aircraft trails (a visible behaviour change, needs Matt's call); cached per-trail sprites; the 3 ms sweep line.
+
+## Feature: Classic radar mode (planned 2026-11-08, next after the smooth-mode perf work)
+
+A "Classic" radar setting beside today's smooth motion (smooth stays the default and keeps working as now).
+In classic mode every target only updates when the sweep passes its bearing, like a real radar, and the
+painted returns fade between passes ("radar paint" look). Matt wants all radar content on the sweep: icons, tags,
+trail growth, halos, and any other per-target redraws.
+Why it is also the frame-rate fix: the 6 s sweep moves ~2 degrees per ~33 ms frame, so with ~40 targets the beam
+crosses about 0.25 targets per frame. Today the live icon pass refreshes ~10 targets a frame and present erases
+and redraws ~150 icons, tags and tips (see the stutter entry above). In classic mode targets are identical
+between passes, so they can live on a cached targets surface and each frame only touches the wedge the beam
+covers: expected steady frames ~15 ms instead of ~34 ms, leaving headroom for the layer rebuild.
+Design notes:
+- Per target, latch position, heading, sprite and tag when the beam crosses its bearing (bearing from radar
+  centre, compared against the previous and current sweep angle, wrap-safe). New targets appear on their first
+  pass; removed targets fade out instead of vanishing.
+- Trails: append the new segment at the pass instead of redrawing every trail in the ~4 s layer rebuild (that
+  rebuild is ~187 ms of worker CPU, 55 of 95 trails being aircraft already gone).
+- Paint fade: each return dims from full brightness at the pass to a floor before the next pass. Per-frame
+  per-target alpha would bring the cost back, so fade in coarse steps (for example 4 to 6 levels a rotation,
+  pre-rendered alpha variants per sprite) and redraw a target only when its level changes, spread across frames.
+- Sweep hidden (show_sweep off): keep an invisible beam driving updates so classic mode still paces itself.
+- Tracked and selected targets: DECIDED (Matt, 2026-11-08) they keep moving smoothly every frame, with their tags
+  and trail tips; only the rest of the traffic waits for the beam.
+- Touch hit-testing must use the latched positions, not the live ones.
+- Setting in settings.py plus the portal (web/app.py, templates) with catalogue strings in all six locales.
+- Measure with FRAME_DEBUG and the hitch log against the smooth-mode baseline in the stutter entry.
 
 ## Log noise (noticed 2026-11-04)
 
