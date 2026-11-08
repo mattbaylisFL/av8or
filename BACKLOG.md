@@ -205,6 +205,29 @@ Original candidate list:
 - Portal and on-screen settings for all of the above, kept in sync (settings.py option lists plus web/app.py and
   index.html), with the catalogue strings in all six locales.
 
+## Daytime radar stutter (measured 2026-11-08, Pi 4B, about 85 targets drawn, ~65 live icons)
+
+Baseline (2026.11.8.14, 09:15 to 09:23 ET, hitch log): 76.5 gaps over 48 ms per minute, 28.0 over 66 ms, 5.4 over
+100 ms. FRAME_DEBUG: main thread about 9 ms live icon frame (4L_live_frame) plus about 25 ms present (4p_erase 4,
+4p_live 8, 4p_sweep 3, 4s_update 4), so steady frames already sit at the 33 ms budget (28 fps). The layer rebuild
+(every ~4 s on the prewarm worker) spends ~635 ms wall in 2r_flights, ~557 ms of it in trails (92 trails, 58 for
+aircraft already off the display, ~5000 fixes projected, 1366 lines, 107 deliberate 2 ms yields); frames during a
+rebuild swell to 70 to 107 ms, which is the visible stutter.
+DONE 156b4cb (release 2026.11.8.16): per-trail projection cache keyed on zoom/pan/facing (fixes projected per
+rebuild ~5000 to 188), thread-local projection batch, batch around the live icon pass. 2r_f_trails 557 to 456 ms
+wall, jank over 99 ms 6.8 to 4.2 per minute, hitch log over 66 ms 28.0 to 23.0 per minute; per-frame cost unchanged.
+TRIED AND REVERTED (930df5c, a3b45e7): redraw only live items whose sprite or rect changed, spreading damage through
+overlaps. Pixel-identical (tests were good) but only 2% of item draws were skipped in this sky: the round-robin icon
+pass refreshes about a third of targets each frame and overlapping tags pull in the rest. 4_present 25.4 to 25.2 ms.
+Do not retry without first making unprocessed targets keep identical sprites and cutting tag overlap.
+Counters added (78b053a, release 2026.11.8.18), 7 min capture at 10:58 ET, about 78 targets: a rebuild is
+~187 ms of worker CPU in ~585 ms wall (trails 114 ms CPU in 501 ms wall; ~118 yields x 2 ms = ~236 ms of sleep, the
+rest GIL waits). 55 of 95 trails drawn are for aircraft already off the display. The live icon pass refreshes ~10 of
+~41 targets per frame and always hits its 6 ms budget (4L_update 6.9 ms), i.e. ~0.6 ms per target refresh.
+Next candidates: a 4 ms live icon budget (each target refreshed every ~6 frames instead of ~4; targets move under
+1 px/s, so likely invisible, and it brings steady frames back under 33 ms); shorter fade or no full redraw for
+gone-aircraft trails (a visible behaviour change, needs Matt's call); cached per-trail sprites; the 3 ms sweep line.
+
 ## Log noise (noticed 2026-11-04)
 
 DONE 2026-11-06 (release 2026.11.7.10, tests/test_log_latches.py): "ATC resuming", "ATC deferred" and the
