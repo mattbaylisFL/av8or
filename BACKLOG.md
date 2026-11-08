@@ -169,6 +169,11 @@ UPSTREAM 2026-11-07: the trim is staged as fork branch perf/periodic-malloc-trim
 from App.run, so it does not depend on the open packed-DB PR that adds mem_debug.py); av8or now uses the same module
 (release 2026.11.7.15, Pi: 60.3 MB back in 11 ms on the first pass). Log latches staged as fix/log-once-per-episode.
 The sampler and C heap report lines can follow upstream once the packed-DB PR (which carries mem_debug.py) merges.
+REVIEW 2026-11-08 (upstream PR 278, yashmulgaonkar): four fixes pushed to perf/packed-local-databases-rebased and
+cherry-picked to av8or (release 2026.11.8.10): near() latitude band /110.0 (old band dropped 29 airports over 1220
+real-cache queries on the Pi, new 0); runways and FAA loaders locked (FAA still sets _loaded before the NASR fetch so
+lookups never wait on the network); preload skips modules with no cache file (no boot downloads); gc_report freeze
+side effect commented. Reply text drafted for Matt to post.
 RETEST 2026-11-06 on upstream 2026.11.6.1 as the base, same Pi, both builds restarted and read at 3 min uptime
 from /proc/<pid>/smaps_rollup: plain upstream RSS 520 MB / 434 MB anonymous, with the packed stores 437 MB / 352 MB,
 so 83 MB less on an identical base and uptime (the early figure is larger than the long-run saving because the
