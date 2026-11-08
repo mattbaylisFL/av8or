@@ -38,9 +38,8 @@ _lofi_tile_stamp = None
 _lofi_tile_stamp_key = None
 _prev_radial_rect: pygame.Rect | None = None
 _prev_location_toast_rect: pygame.Rect | None = None
-# Live icons, tags and trail tips stamped last frame, in draw order, as
-# (signature, rect). Unchanged items stay on screen; see _stamp_live_items.
-_prev_live_items: list = []
+# Rects of the live aircraft icons drawn last frame (erased from the base).
+_prev_icon_rects: list = []
 # Rotated copies of live sprites, keyed by the sprite object. A bare id()
 # collides when pygame reuses a freed Surface address, which painted one
 # aircraft type with another's silhouette.
@@ -210,7 +209,7 @@ def present_radar_sweep(
     global _next_base, _next_base_key, _prev_hud_rect, _prev_bubble_rect
     global _prev_airport_callout_rect, _prev_location_toast_rect
     global _prev_airport_tile_rect, _prev_lofi_rect, _prev_radial_rect
-    global _prev_lofi_tile_rect, _prev_favourite_tile_rect, _prev_live_items
+    global _prev_lofi_tile_rect, _prev_favourite_tile_rect, _prev_icon_rects
     global _upload_y
     from display.round_touch import draw
 
@@ -220,8 +219,6 @@ def present_radar_sweep(
     key = (layer_gen, rotation, theme.SIZE)
     origin_off = (0, 0)
     full_refresh = False
-    # None: the whole base was just blitted, so every live item is redrawn.
-    overlay_damage = None
 
     stale = _rot_base is None or _rot_base_key != key
     swap_in = False
@@ -296,7 +293,7 @@ def present_radar_sweep(
             _prev_favourite_tile_rect = None
             _prev_radial_rect = None
             _prev_location_toast_rect = None
-            _prev_live_items = []
+            _prev_icon_rects = []
             _upload_y = None
             full_refresh = True
     else:
@@ -313,24 +310,10 @@ def present_radar_sweep(
                 r.h,
             )
             display.blit(_rot_base, r.topleft, src)
-        # Live icons are erased selectively in _stamp_live_items; these
-        # overlay erases can uncover them, so they count as damage there.
-        overlay_damage = [
-            r
-            for r in (
-                _prev_sweep_rect,
-                _prev_hud_rect,
-                _prev_bubble_rect,
-                _prev_airport_callout_rect,
-                _prev_airport_tile_rect,
-                _prev_favourite_tile_rect,
-                _prev_lofi_tile_rect,
-                _prev_lofi_rect,
-                _prev_radial_rect,
-                _prev_location_toast_rect,
-            )
-            if r is not None
-        ]
+        # Erase last frame's live aircraft icons (the base has none baked in).
+        for r in _prev_icon_rects:
+            src = pygame.Rect(r.x - origin_off[0], r.y - origin_off[1], r.w, r.h)
+            display.blit(_rot_base, r.topleft, src)
         # Erase previous HUD stamp the same way (base has no HUD baked in).
         if _prev_hud_rect is not None:
             r = _prev_hud_rect
@@ -431,17 +414,11 @@ def present_radar_sweep(
     # Trail tips, then icons, then the sweep, so the beam still passes over
     # the targets. Tips are short lines — a per-frame sprite here was a
     # dirty rectangle big enough to chop the wedge on X11.
-    items = _plan_live_items(display, origin_off, rotation, live_connectors, live_icons)
-    if overlay_damage is None:
-        # Fresh base: draw everything; push last frame's spots and this one's.
-        old_icons = [r for _sig, r in _prev_live_items]
-        new_icons = _draw_live_items(display, items)
-    else:
-        old_icons = []
-        new_icons = _stamp_live_items(
-            display, origin_off, _prev_live_items, items, overlay_damage
-        )
-    _prev_live_items = [(sig, rect) for sig, rect, _draw in items]
+    old_icons = _prev_icon_rects
+    conn_rects = _blit_live_connectors(display, origin_off, rotation, live_connectors)
+    icon_rects = _blit_live_icons(display, origin_off, rotation, live_icons)
+    new_icons = conn_rects + icon_rects
+    _prev_icon_rects = new_icons
     if frame_debug.ENABLED:
         frame_debug.stage("4p_live", time.perf_counter() - _t)
         _t = time.perf_counter()
@@ -618,8 +595,9 @@ def _blit_live_connectors(display, origin_off, rotation: int, connectors) -> lis
     return rects
 
 
-def _alpha_line_rect(display, p0, p1, width: int):
-    """Clipped dirty rect of ``_alpha_line`` for these endpoints, or None."""
+def _alpha_line(display, p0, p1, color, width: int):
+    """Blit one translucent line. The display itself has no per-pixel alpha."""
+    global _line_scratch
     width = max(1, int(width))
     pad = width + 2
     left = int(math.floor(min(p0[0], p1[0]))) - pad
@@ -629,16 +607,6 @@ def _alpha_line_rect(display, p0, p1, width: int):
     rect = pygame.Rect(left, top, right - left + 1, bottom - top + 1)
     rect = rect.clip(display.get_rect())
     if rect.w <= 0 or rect.h <= 0:
-        return None
-    return rect
-
-
-def _alpha_line(display, p0, p1, color, width: int):
-    """Blit one translucent line. The display itself has no per-pixel alpha."""
-    global _line_scratch
-    width = max(1, int(width))
-    rect = _alpha_line_rect(display, p0, p1, width)
-    if rect is None:
         return None
     if (
         _line_scratch is None
@@ -657,109 +625,6 @@ def _alpha_line(display, p0, p1, color, width: int):
     )
     display.blit(_line_scratch, rect.topleft, area)
     return rect
-
-
-def _plan_live_items(display, origin_off, rotation: int, connectors, icons) -> list:
-    """This frame's trail tips then sprites as ``(signature, rect, draw)``.
-
-    Equal signatures mean identical pixels at the same spot: a tip's
-    endpoints, colour and width, or the very same sprite object and rect.
-    """
-    items: list = []
-    for x0, y0, x1, y1, color, width in connectors or ():
-        p0 = _map_display_point(x0, y0, rotation, origin_off)
-        p1 = _map_display_point(x1, y1, rotation, origin_off)
-        width = max(1, int(width))
-        rect = _alpha_line_rect(display, p0, p1, width)
-        if rect is None:
-            continue
-        color = tuple(color)
-        items.append((
-            ("tip", p0, p1, color, width, rect.x, rect.y, rect.w, rect.h),
-            rect,
-            ("tip", p0, p1, color, width),
-        ))
-    for sprite, lx, ly in icons or ():
-        dx, dy = _map_display_point(lx, ly, rotation, (0, 0))
-        img = _rotated_sprite(sprite, rotation)
-        rect = img.get_rect(center=(dx + origin_off[0], dy + origin_off[1]))
-        items.append(((img, rect.x, rect.y, rect.w, rect.h), rect, ("img", img)))
-    return items
-
-
-def _draw_live_item(display, rect, draw) -> None:
-    if draw[0] == "img":
-        display.blit(draw[1], rect)
-    else:
-        _, p0, p1, color, width = draw
-        _alpha_line(display, p0, p1, color, width)
-
-
-def _draw_live_items(display, items) -> list:
-    for _sig, rect, draw in items:
-        _draw_live_item(display, rect, draw)
-    return [rect for _sig, rect, _draw in items]
-
-
-def _stamp_live_items(display, origin_off, prev_items, items, overlay_damage) -> list:
-    """Redraw only the live items whose pixels can differ from last frame.
-
-    Most targets move well under a pixel a frame, so re-erasing and re-pushing
-    ~150 icons, tags and tips every frame was most of the present cost. An
-    item is kept as drawn when last frame stamped the same signature and
-    nothing erased under it: no overlay erase (old sweep, HUD, tiles), and no
-    neighbour that moved, vanished or must itself be redrawn. Redrawn items
-    are erased first, since blitting a translucent sprite twice brightens it.
-    Returns the rects to push.
-    """
-    prev_count: dict = {}
-    for sig, rect in prev_items:
-        prev_count[sig] = prev_count.get(sig, 0) + 1
-    keep: list = []
-    redraw: list = []
-    for item in items:
-        n = prev_count.get(item[0], 0)
-        if n:
-            prev_count[item[0]] = n - 1
-            keep.append(item)
-        else:
-            redraw.append(item)
-    # Items that are gone or moved: their old spots must be erased.
-    erase: list = []
-    for sig, rect in prev_items:
-        n = prev_count.get(sig, 0)
-        if n:
-            prev_count[sig] = n - 1
-            erase.append(rect)
-    erase.extend(item[1] for item in redraw)
-    damage = list(overlay_damage) + erase
-    # Erasing or redrawing one item can wipe or cover part of a kept
-    # neighbour, so spread the damage until it settles.
-    while keep and damage:
-        still: list = []
-        moved = False
-        for item in keep:
-            if item[1].collidelist(damage) != -1:
-                redraw.append(item)
-                damage.append(item[1])
-                erase.append(item[1])
-                moved = True
-            else:
-                still.append(item)
-        keep = still
-        if not moved:
-            break
-    for r in erase:
-        src = pygame.Rect(r.x - origin_off[0], r.y - origin_off[1], r.w, r.h)
-        display.blit(_rot_base, r.topleft, src)
-    drawn = {id(item) for item in redraw}
-    for item in items:
-        if id(item) in drawn:
-            _draw_live_item(display, item[1], item[2])
-    if frame_debug.ENABLED:
-        frame_debug.count("live_kept", len(keep))
-        frame_debug.count("live_drawn", len(redraw))
-    return erase
 
 
 def _blit_live_icons(display, origin_off, rotation: int, icons) -> list:
