@@ -35,10 +35,10 @@ from display.round_touch import (
     follow_overlays,
     frame_debug,
     flap_sound,
-    heap_trim,
     mem_debug,
     ghost_touch_filter,
     gesture_handler,
+    heap_trim,
     hourly_chime,
     input_handler,
     long_press_pan,
@@ -6763,14 +6763,14 @@ class RoundTouchDisplay:
         # hold the GIL; the default 5ms switch interval let them stall the
         # sweep ~150ms per 2s data tick. Shorter slices keep the beam moving.
         sys.setswitchinterval(0.002)
+        # glibc keeps freed heap in its arenas; hand it back every 10 min so
+        # the kiosk does not creep up on 1-2 GB Pis (FLIGHTSCNR_MALLOC_TRIM_S).
+        heap_trim.start()
         # Startup objects (modules, fonts, icon/tile caches) are permanent —
         # freeze them so gen-2 collections stop scanning them (~90ms pauses).
         gc.collect()
         gc.freeze()
         self._install_signal_handlers()
-        # glibc keeps freed heap in its arenas; hand it back every 10 min so
-        # the kiosk does not creep up on 1-2 GB Pis (FLIGHTSCNR_MALLOC_TRIM_S).
-        heap_trim.start()
         _preload_local_databases()
 
         logger.info(
