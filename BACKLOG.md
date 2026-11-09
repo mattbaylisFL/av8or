@@ -230,8 +230,8 @@ DONE da358bb (release 2026.11.8.20): live icon budget 6 to 4 ms. 7 min FRAME_DEB
 today 75 to 80), over 66 ms 21.4 (23 to 31), over 100 ms 5.2 (5.4 to 5.8). Remaining stutter is the layer rebuild
 (~160 to 190 ms worker CPU every ~4 s); classic mode below attacks that, and smooth mode could still gain from
 cheaper gone-aircraft trails.
-UPSTREAM 2026-11-09: 5cc0de1, 156b4cb and da358bb staged as fork branch perf/dense-traffic-frames (PR text drafted
-for Matt to submit). Upstream merged the periodic trim (#282) and log latches (#281) on 2026-11-09.
+UPSTREAM 2026-11-09: 5cc0de1, 156b4cb and da358bb staged as fork branch perf/dense-traffic-frames, opened as upstream
+PR 284 on 2026-11-09. Upstream merged the periodic trim (#282) and log latches (#281) on 2026-11-09.
 Earlier list of next candidates: a 4 ms live icon budget (each target refreshed every ~6 frames instead of ~4; targets move under
 1 px/s, so likely invisible, and it brings steady frames back under 33 ms); shorter fade or no full redraw for
 gone-aircraft trails (a visible behaviour change, needs Matt's call); cached per-trail sprites; the 3 ms sweep line.
