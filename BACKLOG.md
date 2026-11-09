@@ -169,6 +169,15 @@ UPSTREAM 2026-11-07: the trim is staged as fork branch perf/periodic-malloc-trim
 from App.run, so it does not depend on the open packed-DB PR that adds mem_debug.py); av8or now uses the same module
 (release 2026.11.7.15, Pi: 60.3 MB back in 11 ms on the first pass). Log latches staged as fix/log-once-per-episode.
 The sampler and C heap report lines can follow upstream once the packed-DB PR (which carries mem_debug.py) merges.
+REPORT 2026-11-09 (2026.11.9.12 at 1 h 22 min, 2026.11.9.15 at 20 min, ~80 targets; the report now also lists
+surface sizes by total bytes): RSS 476 / 463 MB, anon 390 / 377 MB, C heap in use 209 / 214 MB, free in arenas
+136 / 118 MB, malloc_trim gave back 54 / 56 MB. Surfaces 157 / 162 MB: 8 basemaps 964x964 28.4 MB (one on screen);
+13 full-frame 720x720 layers 25.7 MB (in use); 687 100x100 icon sprites and sub-pixel phases 26 MB; 40 icon
+sub-pixel sources 403x403 24.8 MB plus ~20 tag sources (435 to 459 x 283) ~10 MB, kept in vis["up"] so new phases
+are cheap; rotation._rot_sprite_cache 19 to 22 MB (rotated copies of those phases). The Pi has ~1 GB available, so
+none of this is pressure on a 2 GB board; it matters for 1 GB boards. Candidates: (1) map_bg keeps only the active
+scale and its neighbours (~20 MB); (2) an LRU cap on vis["up"] (rebuilding one costs 4.2 ms on the Pi and a phase
+1.5 ms, so dropping them outright would push the live icon pass over budget; cap them instead, ~25 MB).
 MERGED 2026-11-09: upstream PR 278 (packed local databases, merge 834691b at 07:30 UTC) together with 280 (weather
 test timezone), 281 (log latches) and 282 (periodic trim). The sampler/C heap report follow-up is now unblocked.
 REVIEW 2026-11-08 (upstream PR 278, yashmulgaonkar): four fixes pushed to perf/packed-local-databases-rebased and
@@ -234,6 +243,25 @@ today 75 to 80), over 66 ms 21.4 (23 to 31), over 100 ms 5.2 (5.4 to 5.8). Remai
 cheaper gone-aircraft trails.
 UPSTREAM 2026-11-09: 5cc0de1, 156b4cb and da358bb staged as fork branch perf/dense-traffic-frames, opened as upstream
 PR 284 on 2026-11-09. Upstream merged the periodic trim (#282) and log latches (#281) on 2026-11-09.
+DONE 850601f (release 2026.11.9.17), found by a fresh capture on 2026-11-09 (~80 targets): two once-a-minute
+freezes on the display thread, 1.5 to 1.9 per minute over 250 ms. (1) radar_hud.needs_minute_invalidate() called
+invalidate_frame_layer(), so the next frame rebuilt the layer inline (300 to 440 ms); it now calls
+expire_frame_layer() and the worker rebuilds. (2) lofi_audio.app_tick asked atc_audio.is_playing() twice a second
+with lofi off; with no ATC stream that walks every /proc/<pid>/cmdline, and with a busy worker each GIL release cost
+up to a switch interval (250 to 580 ms once a minute, 23 ms average; the same walk takes 9 ms in a quiet process).
+Lofi now returns early when off and the display runs the orphan walk on a worker. 10 min FRAME_DEBUG and hitch log
+after 3 min uptime: gaps over 250 ms 1.6 to 0.1 per minute, inline rebuilds 10 to 1 per 10 min, max gap 731 to
+553 ms; the 66/100 ms rates are unchanged (25 and 4 per minute; the 4 s layer rebuild). New probes, FRAME_DEBUG
+only (401a272): lm_* sub-stages of loop_misc and inval_<module>_<line> counts.
+Still open from the same captures, in rough value order:
+- The one inline rebuild left is app._tick_data: aircraft_alert.check_new_aircraft() -> invalidate_frame_layer()
+  (~400 ms, a few times an hour). It wants a quick rim flash, so check whether expire plus an immediate prewarm is
+  fast enough before changing it. Most other invalidate callers are taps in menus and settings (one freeze per tap).
+- Gone-aircraft trails: 63 of 95 trails drawn per rebuild are for aircraft already off the display (2r_f_trails
+  415 ms wall, 99 ms CPU, 96 deliberate 2 ms yields). Shorter fade or a cached surface is a visible change: Matt's call.
+- loop_prewarm_spawn 11.8 ms on the display thread per rebuild (the _radar_flights() snapshot plus Thread start).
+- smooth_apply 9.9 ms per data tick; flip_observe 56 ms on its worker; AutoFloor probe 4.4 ms once a second (fine).
+- Slow gen-0 collections (only passes over 5 ms are logged): median 10 ms, about one every 4 s.
 Earlier list of next candidates: a 4 ms live icon budget (each target refreshed every ~6 frames instead of ~4; targets move under
 1 px/s, so likely invisible, and it brings steady frames back under 33 ms); shorter fade or no full redraw for
 gone-aircraft trails (a visible behaviour change, needs Matt's call); cached per-trail sprites; the 3 ms sweep line.
