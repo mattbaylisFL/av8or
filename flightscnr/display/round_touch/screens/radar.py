@@ -1825,6 +1825,20 @@ def set_trail_selection(flight) -> None:
 
 _trail_overlay: pygame.Surface | None = None
 
+# When each trail's aircraft was first missing from the display (layer worker
+# only). Gone trails used to keep fading for the full trail length (120 s by
+# default), so in busy traffic about two thirds of the trails drawn on every
+# layer rebuild belonged to aircraft that had already left.
+_trail_gone_since: dict[str, float] = {}
+_GONE_TRAIL_FADE_S = float(os.environ.get("FLIGHTSCNR_GONE_TRAIL_FADE_S", "20"))
+
+
+def _gone_trail_scale(gone_s: float) -> float:
+    """Opacity multiplier for a trail whose aircraft left ``gone_s`` ago."""
+    if _GONE_TRAIL_FADE_S <= 0:
+        return 1.0
+    return max(0.0, 1.0 - gone_s / _GONE_TRAIL_FADE_S)
+
 
 def _trail_overlay_surface(size) -> pygame.Surface:
     """Reuse one full-screen trail buffer so a bake doesn't allocate every time."""
@@ -1876,12 +1890,21 @@ def _draw_trails(surface, items) -> None:
             _trail_heads_building[ident] = (
                 (x, y), flight_trails.speed_color(pts[-1][2]), width,
             )
-    # Aircraft that already left the display: the path keeps fading out.
+    # Aircraft that already left the display: the whole path fades out over
+    # _GONE_TRAIL_FADE_S, then stops being drawn. The fixes stay stored, so a
+    # flight that comes straight back still has its trail.
     gone: set = set()
-    for ident in flight_trails.identities():
+    known = flight_trails.identities()
+    for ident in known:
         if ident in drawn:
+            _trail_gone_since.pop(ident, None)
             continue
         if mode != "all" and ident != _trail_selected_id:
+            continue
+        since = _trail_gone_since.setdefault(ident, now)
+        scale = _gone_trail_scale(now - since)
+        if scale <= 0.0:
+            frame_debug.count("trail_ids_gone_hidden")
             continue
         if overlay is None:
             overlay = _trail_overlay_surface(surface.get_size())
@@ -1890,8 +1913,12 @@ def _draw_trails(surface, items) -> None:
         flight_trails.draw_trail(
             overlay, ident, project, width=width, now=now,
             base_alpha=_TRAIL_ALPHA, head_xy=None, dot_radius=dot_r,
-            proj_key=proj_key,
+            proj_key=proj_key, alpha_scale=scale,
         )
+    if len(_trail_gone_since) > len(known):
+        live = set(known)
+        for ident in [k for k in _trail_gone_since if k not in live]:
+            _trail_gone_since.pop(ident, None)
     flight_trails.prune_projection_cache(drawn | gone)
     if overlay is not None:
         surface.blit(overlay, (0, 0))

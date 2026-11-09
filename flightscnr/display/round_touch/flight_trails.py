@@ -169,6 +169,7 @@ def draw_trail(
     dot_radius: int = 0,
     dot_gap_px: int = 14,
     proj_key=None,
+    alpha_scale: float = 1.0,
 ) -> None:
     """Paint one aircraft's trail onto an SRCALPHA ``surface``.
 
@@ -180,9 +181,14 @@ def draw_trail(
 
     With ``proj_key`` (any hashable that changes whenever ``project`` would
     map a point differently) fixes projected in an earlier pass are reused.
+
+    ``alpha_scale`` (0 to 1) dims the whole path on top of the per-point age
+    fade; the radar uses it to fade out aircraft that left the display.
     """
     import pygame
 
+    if alpha_scale <= 0.0:
+        return
     pts = points(identity)
     if not pts:
         return
@@ -248,7 +254,7 @@ def draw_trail(
             prev = None
             continue
         fade = 1.0 - age / trail_s
-        alpha = int(base_alpha * fade)
+        alpha = int(base_alpha * fade * alpha_scale)
         if alpha >= 3 and prev is not None and not seg:
             (x0, y0), s0, a0 = prev
             x1, y1 = p
