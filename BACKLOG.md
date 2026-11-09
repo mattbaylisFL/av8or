@@ -270,13 +270,14 @@ Design notes:
 DONE 2026-11-06 (release 2026.11.7.10, tests/test_log_latches.py): "ATC resuming", "ATC deferred" and the
 Bluetooth "offline, reconnecting" now log at info once per episode and at debug after that; the retries are
 unchanged, and "Bluetooth speaker <mac> connected" marks the end of an outage. On the Pi each logged once after the
+restart and then nothing for 8 minutes (before: all three every 30 to 40 s). Still noisy: "[ais] snapshot: N
+vessels" every 10 s at info; a latch on the counts (log on change, or once a minute) would quiet it.
 DONE 2026-11-09 (8fe5488, release 2026.11.9.12, tests/test_log_spawn_cleanup.py): rfkill unblock gated on
 /sys/class/rfkill soft state, systemctl is-active skipped while bluetoothd is in /proc, fr24 login note passed
 once per process, "[ais] snapshot" at info only on first pass, connect/drop and every 10 min. Pi, 10 min after the
 deploy with the speaker offline: fr24 auth lines 23 to 1 per 10 min, AIS snapshot info lines 59 to 2, PIDs
-allocated 138 to 128 per minute, no tracebacks.
-restart and then nothing for 8 minutes (before: all three every 30 to 40 s). Still noisy: "[ais] snapshot: N
-vessels" every 10 s at info; a latch on the counts (log on change, or once a minute) would quiet it.
+allocated 138 to 128 per minute, no tracebacks. UPSTREAM 2026-11-09: fork branch fix/quiet-logs-skip-spawns,
+PR submitted by Matt.
 Original note:
 With the speaker off and ATC enabled, the journal repeats every 30 s "ATC resuming - quiet hours ended" followed by
 "ATC deferred - no USB/Bluetooth speaker": the resume path re-announces on every tick instead of once per
@@ -290,3 +291,4 @@ tests/test_open_meteo_weather.py: 9 tests pass in the evening (21:00 ET on 2026-
 (07:15 ET on 2026-11-04) on the same commit, with the forecast fixture yielding 2 days instead of 3. Looks like a
 local-date versus UTC-date boundary in the forecast day pruning or the fixture's dates; needs a frozen clock in the
 test. Not related to any display work.
+DONE: efb0589 pins the weather tests to the fixture's timezone (upstream PR 280, merged 2026-11-09).
