@@ -169,6 +169,8 @@ UPSTREAM 2026-11-07: the trim is staged as fork branch perf/periodic-malloc-trim
 from App.run, so it does not depend on the open packed-DB PR that adds mem_debug.py); av8or now uses the same module
 (release 2026.11.7.15, Pi: 60.3 MB back in 11 ms on the first pass). Log latches staged as fix/log-once-per-episode.
 The sampler and C heap report lines can follow upstream once the packed-DB PR (which carries mem_debug.py) merges.
+MERGED 2026-11-09: upstream PR 278 (packed local databases, merge 834691b at 07:30 UTC) together with 280 (weather
+test timezone), 281 (log latches) and 282 (periodic trim). The sampler/C heap report follow-up is now unblocked.
 REVIEW 2026-11-08 (upstream PR 278, yashmulgaonkar): four fixes pushed to perf/packed-local-databases-rebased and
 cherry-picked to av8or (release 2026.11.8.10): near() latitude band /110.0 (old band dropped 29 airports over 1220
 real-cache queries on the Pi, new 0); runways and FAA loaders locked (FAA still sets _loaded before the NASR fetch so
@@ -268,6 +270,11 @@ Design notes:
 DONE 2026-11-06 (release 2026.11.7.10, tests/test_log_latches.py): "ATC resuming", "ATC deferred" and the
 Bluetooth "offline, reconnecting" now log at info once per episode and at debug after that; the retries are
 unchanged, and "Bluetooth speaker <mac> connected" marks the end of an outage. On the Pi each logged once after the
+DONE 2026-11-09 (8fe5488, release 2026.11.9.12, tests/test_log_spawn_cleanup.py): rfkill unblock gated on
+/sys/class/rfkill soft state, systemctl is-active skipped while bluetoothd is in /proc, fr24 login note passed
+once per process, "[ais] snapshot" at info only on first pass, connect/drop and every 10 min. Pi, 10 min after the
+deploy with the speaker offline: fr24 auth lines 23 to 1 per 10 min, AIS snapshot info lines 59 to 2, PIDs
+allocated 138 to 128 per minute, no tracebacks.
 restart and then nothing for 8 minutes (before: all three every 30 to 40 s). Still noisy: "[ais] snapshot: N
 vessels" every 10 s at info; a latch on the counts (log on change, or once a minute) would quiet it.
 Original note:
