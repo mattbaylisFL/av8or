@@ -338,6 +338,11 @@ def surface_report(app, top: int = 30) -> list[str]:
     lines.append("surface dimensions (w, h, bytes/px) by count:")
     for (w, h, bpp), n in dims.most_common(12):
         lines.append(f"  {n:5d}x {w}x{h}x{bpp} = {n * w * h * bpp / 1048576:.1f} MB")
+    # A few large surfaces can outweigh hundreds of small ones.
+    lines.append("surface dimensions by total bytes:")
+    heavy = sorted(dims.items(), key=lambda kv: kv[0][0] * kv[0][1] * kv[0][2] * kv[1], reverse=True)
+    for (w, h, bpp), n in heavy[:12]:
+        lines.append(f"  {n:5d}x {w}x{h}x{bpp} = {n * w * h * bpp / 1048576:.1f} MB")
     return lines
 
 
