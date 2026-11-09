@@ -11,6 +11,7 @@
 
 import math
 import os
+import sys
 import threading
 import time
 
@@ -219,6 +220,12 @@ def invalidate_frame_layer() -> None:
     global _frame_layer, _frame_layer_key, _frame_layer_at, _frame_layer_gen
     global _rim_baked_in_layer
     frame_debug.count("layer_invalidate")
+    if frame_debug.ENABLED:
+        # Name the caller: an invalidate forces the next frame to rebuild the
+        # whole layer on the display thread.
+        caller = sys._getframe(1)
+        mod = os.path.splitext(os.path.basename(caller.f_code.co_filename))[0]
+        frame_debug.count(f"inval_{mod}_{caller.f_lineno}")
     _frame_layer = None
     _frame_layer_key = None
     _frame_layer_at = 0.0

@@ -7320,10 +7320,14 @@ class RoundTouchDisplay:
                             self._last_static_draw = now
 
                 _lt = time.perf_counter()
+                # Sub-stages (FRAME_DEBUG only, each logged when >= 1 ms).
+                _mt = _lt
                 # Nothing operational until Accept — no chime, weather, idle, etc.
                 if self._session_unlocked:
                     self._tick_timeout()
+                    _mt = self._loop_stage("lm_timeout", _mt)
                     self._tick_auto_idle_clock()
+                    _mt = self._loop_stage("lm_idle_clock", _mt)
                     if radar_hud.tick_popover_timeout():
                         radar.invalidate_frame_layer()
                         self._safe_draw()
@@ -7341,26 +7345,40 @@ class RoundTouchDisplay:
                     if radial_menu.tick():
                         radar.invalidate_frame_layer()
                         self._safe_draw()
+                    _mt = self._loop_stage("lm_tiles", _mt)
                     try:
                         from utilities import atc_audio, lofi_audio
 
                         atc_audio.enforce_quiet_hours()
+                        _mt = self._loop_stage("lm_atc_quiet", _mt)
                         lofi_audio.app_tick()
+                        _mt = self._loop_stage("lm_lofi", _mt)
                         if lofi_tile.tick():
                             self._safe_draw()
                     except Exception:
                         logger.debug("Audio tick failed", exc_info=True)
+                    _mt = self._loop_stage("lm_lofi_tile", _mt)
                     hourly_chime.tick()
+                    _mt = self._loop_stage("lm_chime", _mt)
                     self._tick_alarm()
+                    _mt = self._loop_stage("lm_alarm", _mt)
                     self._tick_ram_notice()
+                    _mt = self._loop_stage("lm_ram", _mt)
                     self._tick_hourly_weather_refresh()
+                    _mt = self._loop_stage("lm_weather_hourly", _mt)
                     self._tick_manual_weather_refresh()
+                    _mt = self._loop_stage("lm_weather_manual", _mt)
                     self._tick_off_hours_clock()
+                    _mt = self._loop_stage("lm_off_hours", _mt)
                 self._apply_brightness()
+                _mt = self._loop_stage("lm_brightness", _mt)
                 self._tick_pixel_shift()
+                _mt = self._loop_stage("lm_pixel_shift", _mt)
                 mem_debug.maybe_report(self)
+                _mt = self._loop_stage("lm_mem", _mt)
                 if not self._slider_drag_armed():
                     settings.flush_pending()
+                _mt = self._loop_stage("lm_settings_flush", _mt)
                 self._loop_stage("loop_misc", _lt)
                 if FRAME_DEBUG:
                     try:
