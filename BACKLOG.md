@@ -277,6 +277,13 @@ Still open from the same captures, in rough value order:
   66 ms per minute under 66 (about 5%; a lower bound, since slow-frame lines list only the top 10 stages) and frees
   about 5 ms of display-thread time per second. Small: worth doing only alongside other work in that code.
 - Slow gen-0 collections (only passes over 5 ms are logged): median 10 ms, about one every 4 s.
+- TESTED, NOT WORTH IT (2026-11-10, experiment only, nothing committed): a live icon budget below 4 ms. Interleaved
+  on the Pi (4, 2, 0.5 ms, twice, 5 min each after 3 min warm-up, 61 to 76 targets, traffic rising through the run).
+  Per frame: 4L_live_frame 6.4/4.6/3.3 ms then 6.8/5.0/3.6; loop_body 34.7/31.9/31.6 then 37.1/36.3/34.3. Hitch log
+  gaps over 66 ms per minute: 19.6/21.8/23.4 then 30.4/30.0/26.0; over 100 ms: 2.8/2.2/4.2 then 5.0/6.2/5.8. So even
+  the floor (about one target refreshed per frame, 2 ms of fixed pass overhead left) saves 2 to 3 ms a frame and does
+  not move the stutter rate; traffic moves it far more. The 66 ms frames are not a steady-frame headroom problem
+  that a few ms fixes. Seen in passing: 4p_overlays is a steady 8 ms per frame, the largest single present stage.
 Earlier list of next candidates: a 4 ms live icon budget (each target refreshed every ~6 frames instead of ~4; targets move under
 1 px/s, so likely invisible, and it brings steady frames back under 33 ms); shorter fade or no full redraw for
 gone-aircraft trails (a visible behaviour change, needs Matt's call); cached per-trail sprites; the 3 ms sweep line.
