@@ -257,7 +257,7 @@ Still open from the same captures, in rough value order:
 - DONE f179abb (release 2026.11.9.19): app._tick_data called invalidate_frame_layer() after check_new_aircraft(), an
   inline rebuild at every new alert. Now expire_frame_layer(); the worker bakes the rim flash ~0.5 s into the 12 s
   flash. Worst gap at each alert tick: 410 to 637 ms (median 525, 8 alerts, 11:24 to 16:00) to 120 and 176 ms (2
-  alerts by 20:30). UPSTREAM: fork branch perf/alert-expire-layer, stacked on perf/minute-freezes.
+  alerts by 20:30). UPSTREAM PR 287 (open; parent PR 286, minute freezes, merged 2026-11-10).
 - REVERTED 1f0f2fb (Matt: not enough perf gain to change how trails look). Was: DONE b1d73de (release 2026.11.9.18), Matt chose the faster fade: gone-aircraft trails fade out over 20 s
   (FLIGHTSCNR_GONE_TRAIL_FADE_S, 0 = old behaviour) and then stop being drawn; fixes stay stored. Interleaved A/B on
   the Pi (old, new, old, new, 6 min each, 80 to 86 targets): gone trails drawn per rebuild 51.5 to 3.5, trail lines
@@ -267,8 +267,8 @@ Still open from the same captures, in rough value order:
   every frame between windows, traffic +28%, no throttling): interleave A/Bs. Upstream branch dropped.
 - DONE 5457478 (release 2026.11.10.11): the :01/:31 scheduled weather refresh set _weather_redraw_pending and the
   radar then called invalidate_frame_layer(). Now expire_frame_layer(). Worst gap at each tick: 15 of 17 ticks
-  froze, 213 to 528 ms (median 354, lower in the evening), to 74 and 84 ms (20:01, 20:31). UPSTREAM: fork branch
-  perf/weather-expire-layer, stacked on perf/alert-expire-layer. Remaining invalidate callers are user actions
+  froze, 213 to 528 ms (median 354, lower in the evening), to 74 and 84 ms (20:01, 20:31). UPSTREAM PR 288 (open, stacked on 287).
+  Remaining invalidate callers are user actions
   (menus, settings, location changes): one freeze per tap.
 - loop_prewarm_spawn 11.4 ms on the display thread per rebuild (the _radar_flights() snapshot plus Thread start).
 - smooth_apply 5 to 10 ms per data tick; flip_observe 56 ms on its worker; AutoFloor probe 4.4 ms once a second (fine).
