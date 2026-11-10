@@ -254,19 +254,22 @@ after 3 min uptime: gaps over 250 ms 1.6 to 0.1 per minute, inline rebuilds 10 t
 553 ms; the 66/100 ms rates are unchanged (25 and 4 per minute; the 4 s layer rebuild). New probes, FRAME_DEBUG
 only (401a272): lm_* sub-stages of loop_misc and inval_<module>_<line> counts.
 Still open from the same captures, in rough value order:
-- The one inline rebuild left is app._tick_data: aircraft_alert.check_new_aircraft() -> invalidate_frame_layer()
-  (~400 ms, a few times an hour). It wants a quick rim flash, so check whether expire plus an immediate prewarm is
-  fast enough before changing it. Most other invalidate callers are taps in menus and settings (one freeze per tap).
-- DONE b1d73de (release 2026.11.9.18), Matt chose the faster fade: gone-aircraft trails fade out over 20 s
+- DONE f179abb (release 2026.11.9.19): app._tick_data called invalidate_frame_layer() after check_new_aircraft(), an
+  inline rebuild at every new alert. Now expire_frame_layer(); the worker bakes the rim flash ~0.5 s into the 12 s
+  flash. Worst gap at each alert tick: 410 to 637 ms (median 525, 8 alerts, 11:24 to 16:00) to 120 and 176 ms (2
+  alerts by 20:30). UPSTREAM: fork branch perf/alert-expire-layer, stacked on perf/minute-freezes.
+- REVERTED 1f0f2fb (Matt: not enough perf gain to change how trails look). Was: DONE b1d73de (release 2026.11.9.18), Matt chose the faster fade: gone-aircraft trails fade out over 20 s
   (FLIGHTSCNR_GONE_TRAIL_FADE_S, 0 = old behaviour) and then stop being drawn; fixes stay stored. Interleaved A/B on
   the Pi (old, new, old, new, 6 min each, 80 to 86 targets): gone trails drawn per rebuild 51.5 to 3.5, trail lines
   1350 to 885 per 10 s, 2r_f_trails 469 to 325 ms wall and 110 to 75 ms CPU, layer rebuild 563 to 416 ms. Frames
   over 66 ms 26.3 to 25.3 per minute, over 100 ms 4.0 to 3.3: the cheaper layer barely moves frame stutter, so the
   layer worker's GIL time is not what sets the 66 ms rate. A first sequential A/B was void (present 23 to 31 ms on
-  every frame between windows, traffic +28%, no throttling): interleave A/Bs. UPSTREAM: fork branch
-  perf/gone-trail-fade (re-applied by hand: upstream has no trail projection cache).
-- NEW 2026-11-09: app.py ~line 7186, _weather_redraw_pending on the radar calls invalidate_frame_layer() after a
-  weather refresh: one 259 ms inline rebuild seen in 24 min. Same fix as the alert (expire_frame_layer()).
+  every frame between windows, traffic +28%, no throttling): interleave A/Bs. Upstream branch dropped.
+- DONE 5457478 (release 2026.11.10.11): the :01/:31 scheduled weather refresh set _weather_redraw_pending and the
+  radar then called invalidate_frame_layer(). Now expire_frame_layer(). Worst gap at each tick: 15 of 17 ticks
+  froze, 213 to 528 ms (median 354, lower in the evening), to 74 and 84 ms (20:01, 20:31). UPSTREAM: fork branch
+  perf/weather-expire-layer, stacked on perf/alert-expire-layer. Remaining invalidate callers are user actions
+  (menus, settings, location changes): one freeze per tap.
 - loop_prewarm_spawn 11.4 ms on the display thread per rebuild (the _radar_flights() snapshot plus Thread start).
 - smooth_apply 5 to 10 ms per data tick; flip_observe 56 ms on its worker; AutoFloor probe 4.4 ms once a second (fine).
   ESTIMATE 2026-11-09 from the 24 min A/B logs: spawn and smooth_apply land in the same loop pass (the same 39 slow
