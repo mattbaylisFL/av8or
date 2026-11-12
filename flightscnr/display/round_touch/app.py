@@ -1022,6 +1022,7 @@ class RoundTouchDisplay:
                     _t = time.perf_counter()
                 live_icons = radar.live_icon_frame()
                 live_connectors = radar.live_trail_connectors()
+                live_rim = radar.live_rim_spec()
                 if FRAME_DEBUG:
                     self._stage("4L_live_frame", time.perf_counter() - _t)
                 sweep_angle = radar.current_sweep_angle()
@@ -1036,6 +1037,7 @@ class RoundTouchDisplay:
                         draw_sweep=show_sweep,
                         live_icons=live_icons,
                         live_connectors=live_connectors,
+                        live_rim=live_rim,
                     )
                     self._stage("4_present", time.perf_counter() - _t)
                 else:
@@ -1048,6 +1050,7 @@ class RoundTouchDisplay:
                         draw_sweep=show_sweep,
                         live_icons=live_icons,
                         live_connectors=live_connectors,
+                        live_rim=live_rim,
                     )
                 return
 
@@ -4620,6 +4623,33 @@ class RoundTouchDisplay:
         self._open_screen(SCREEN_LIVE)
         self._safe_draw()
 
+    def _stop_following_current_flight(self) -> None:
+        """Stop following the flight on the detail page ("Stop following").
+
+        Stays on the detail page; the pill flips back to "Follow this Flight".
+        """
+        from utilities.overhead import load_tracked_callsign
+
+        ordered = self._ordered_flights()
+        if ordered:
+            idx = max(0, min(self.flight_index, len(ordered) - 1))
+            callsign = str(ordered[idx].get("callsign") or "").strip().upper()
+            # The list can reorder between draw and tap; only stop the follow
+            # the pill was showing.
+            if callsign and load_tracked_callsign() != callsign:
+                self._safe_draw()
+                return
+        try:
+            self.overhead.stop_tracking()
+        except Exception:
+            logger.exception("Stop following failed")
+        tracked.clear_pinned()
+        self._follow_photo_open = False
+        # The radar layer marks the followed aircraft; refresh it off-thread.
+        radar.expire_frame_layer()
+        logger.info("Stopped following from the flight detail page")
+        self._safe_draw()
+
     def _maybe_handle_tracking_cleared(self) -> bool:
         """Leave Follow/Tracked and show popup when overhead auto-cleared the pin.
 
@@ -5306,7 +5336,11 @@ class RoundTouchDisplay:
                 else:
                     self._safe_draw()
                 return
-            if flight_detail.follow_button_hit(tap[0], tap[1]):
+            follow_action = flight_detail.follow_button_action(tap[0], tap[1])
+            if follow_action == "stop":
+                self._stop_following_current_flight()
+                return
+            if follow_action == "follow":
                 self._request_follow_current_flight()
                 return
             self._sync_selected_flight_index()
@@ -5754,6 +5788,16 @@ class RoundTouchDisplay:
                 alarm_ui.editor_drag_end()
 
         gesture = self.input.consume_gesture()
+        if (
+            gesture
+            and gesture[0] == "swipe"
+            and gesture[1] == input_handler.SWIPE_UP
+            and not alarm_clock.is_ringing()
+            and alarm_ui.editor_swipe_up(gesture[3] if len(gesture) > 3 else None)
+        ):
+            self._note_activity()
+            self._safe_draw()
+            return
         if not gesture or gesture[0] != "tap":
             return
         pos = gesture[1]
@@ -6349,7 +6393,8 @@ class RoundTouchDisplay:
                 # Expire, don't invalidate: dropping the layer made the next
                 # frame rebuild it on the display thread (~400 ms freeze).
                 # The worker bakes the rim flash into the next layer, about
-                # one build (~0.5 s) into the 12 s flash; the sound is not
+                # one build (~0.5 s) into the 12 s flash; with Smooth motion
+                # the rim is drawn per frame instead. The sound is not
                 # delayed.
                 radar.expire_frame_layer()
                 # Don't bury attention on Idle clock / forecast — jump back to radar.
