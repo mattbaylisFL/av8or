@@ -210,3 +210,23 @@ jobs:
           n="$(gh issue list --label upstream-sync --state open --json number --jq '.[0].number // empty')"
           if [ -n "$n" ]; then gh issue comment "$n" --body-file body.md
           else gh issue create --label upstream-sync --assignee "$NOTIFY_USER" --title "Upstream sync has merge conflicts" --body-file body.md; fi
+
+  # A conflict resolved by hand leaves the default branch already containing
+  # upstream, so the next run is "up_to_date" and publish never runs. Close the
+  # stale issue here instead of waiting for the next upstream change.
+  resolved:
+    needs: merge
+    if: needs.merge.outputs.status == 'up_to_date'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BASE_SHA: ${{ needs.merge.outputs.base_sha }}
+    steps:
+      - name: Close resolved upstream-sync issues
+        run: |
+          set -euo pipefail
+          for n in $(gh issue list --label upstream-sync --state open --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "Resolved: \`$BASE_BRANCH\` already contains upstream (${BASE_SHA:0:7})."
+          done

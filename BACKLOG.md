@@ -169,6 +169,10 @@ UPSTREAM 2026-11-07: the trim is staged as fork branch perf/periodic-malloc-trim
 from App.run, so it does not depend on the open packed-DB PR that adds mem_debug.py); av8or now uses the same module
 (release 2026.11.7.15, Pi: 60.3 MB back in 11 ms on the first pass). Log latches staged as fix/log-once-per-episode.
 The sampler and C heap report lines can follow upstream once the packed-DB PR (which carries mem_debug.py) merges.
+ALIGNED 2026-11-12 (issue #10): mem_debug.py, test_mem_debug.py, app.py and radar.py reset to upstream 2026.11.11.1.
+Dropped from av8or as not upstream: FLIGHTSCNR_MEM_SAMPLE_S sampler, C heap (mallinfo2/malloc_trim) report lines,
+"surfaces by total bytes", loop_misc lm_* sub-stages, inval_<module>_<line> counters, 2r_cpu, 2r_f_trails_cpu,
+live_processed/live_targets/4L_update. Offer them upstream as a new PR if still wanted.
 REPORT 2026-11-09 (2026.11.9.12 at 1 h 22 min, 2026.11.9.15 at 20 min, ~80 targets; the report now also lists
 surface sizes by total bytes): RSS 476 / 463 MB, anon 390 / 377 MB, C heap in use 209 / 214 MB, free in arenas
 136 / 118 MB, malloc_trim gave back 54 / 56 MB. Surfaces 157 / 162 MB: 8 basemaps 964x964 28.4 MB (one on screen);

@@ -98,6 +98,12 @@ Actions tab (workflow_dispatch).
    boot safety disclaimer (`screens/disclaimer.py`, `disclaimer_acceptance.py`);
    it's upstream policy and a safety notice, shown on every boot by design.
 
+5. **Changes offered upstream live upstream only.** Once upstream merges one of
+   our PRs, reset the touched files to upstream's version (`git checkout
+   upstream/main -- <files>`) instead of keeping our variant or a blend. Extras
+   upstream didn't take go back as a new upstream PR, not into this repo. A
+   leftover variant conflicts with every later upstream edit to that file.
+
 If a sync conflicts on the wordmark lines, re-apply the one-word change by hand
 (see the table above) and push.
 

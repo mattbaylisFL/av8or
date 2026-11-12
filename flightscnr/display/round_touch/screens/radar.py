@@ -11,7 +11,6 @@
 
 import math
 import os
-import sys
 import threading
 import time
 
@@ -220,12 +219,6 @@ def invalidate_frame_layer() -> None:
     global _frame_layer, _frame_layer_key, _frame_layer_at, _frame_layer_gen
     global _rim_baked_in_layer
     frame_debug.count("layer_invalidate")
-    if frame_debug.ENABLED:
-        # Name the caller: an invalidate forces the next frame to rebuild the
-        # whole layer on the display thread.
-        caller = sys._getframe(1)
-        mod = os.path.splitext(os.path.basename(caller.f_code.co_filename))[0]
-        frame_debug.count(f"inval_{mod}_{caller.f_lineno}")
     _frame_layer = None
     _frame_layer_key = None
     _frame_layer_at = 0.0
@@ -416,10 +409,7 @@ def prewarm_frame_layer(flights) -> None:
 
     # Paint while only this worker owns ``build`` — do not hold _layer_lock.
     _rebuild_counts["layer"] += 1
-    _cpu = time.thread_time() if frame_debug.ENABLED else 0.0
     rim_baked = _build_frame_layer(build, backdrop, flights, None)
-    if frame_debug.ENABLED:
-        frame_debug.stage("2r_cpu", time.thread_time() - _cpu)
     # Private snapshot before publish: rotation.prewarm_base must never lock
     # the live published surface concurrent with present/blit.
     snap = build.copy()
@@ -1714,10 +1704,6 @@ def live_icon_frame(now: float | None = None) -> list:
             _live_frame_cursor = (index_by_id[ident] + 1) % count
     finally:
         map_bg.end_projection_batch()
-    if frame_debug.ENABLED:
-        frame_debug.count("live_processed", len(processed_ids))
-        frame_debug.count("live_targets", count)
-        frame_debug.stage("4L_update", time.perf_counter() - started)
 
     # The layer-prewarm worker prunes this cache when it publishes a new target
     # set. Iterating the shared dict directly can raise "dictionary changed
@@ -2305,12 +2291,7 @@ def _draw_flights(surface, flights, live=None, live_labels=None):
             )
 
         _sub = frame_debug.end("2r_f_rim", _sub)
-        _cpu = time.thread_time() if frame_debug.ENABLED else 0.0
         _draw_trails(surface, inner_items)
-        if frame_debug.ENABLED:
-            # Thread CPU, against the wall time above: the rest is GIL waits
-            # and the deliberate yields inside draw_trail.
-            frame_debug.stage("2r_f_trails_cpu", time.thread_time() - _cpu)
         _sub = frame_debug.end("2r_f_trails", _sub)
         from display.round_touch import position_smooth
 
