@@ -565,3 +565,76 @@ letsencrypt.org/docs/challenge-types (updated 2026-02-12), /docs/certificates-fo
 (updated 2026-08-05), /2026/01/15/6day-and-ip-general-availability; Chromium
 `docs/security/ask-before-http/ask-before-http-adoption-guide.md`; attackanddefense.dev HTTPS-First in Firefox 136;
 Safari 18.2 release notes via engineered.at; words.filippo.io on Plex; tailscale.com/docs/how-to/set-up-https-certificates.
+
+Follow-up 2026-11-16: desktop Chrome on Windows (Matt's report)
+Report: latest Chrome on Windows changes the `.local` address to https and fails with no fallback; editing it to
+`http://` loads the portal on the same machine; Chrome on iOS falls back correctly.
+
+What Chromium's current source says (main branch read 2026-11-16; the exact stable build and its field trials
+were NOT checked, and nothing was tested on a Windows machine):
+- `components/omnibox/browser/autocomplete_input.cc`, `ShouldUpgradeToHttps`: "Never upgrade IP addresses or
+  non-unique hostnames on non-iOS builds". `net::IsHostnameNonUnique` is true for any name without a known public
+  TLD, which includes `.local`, and for private IPs. So desktop Chrome does not add https to a typed bare
+  `<hostname>.local`. iOS is carved out of that rule, which matches iOS upgrading and then falling back.
+- `chrome/browser/ssl/https_upgrades_interceptor.cc`: `http://` navigations to non-unique hostnames are not
+  upgraded at all unless the strict setting is on ("Always use secure connections" set to warn for public and
+  private sites). The Chrome 154 default is the public-sites mode, which exempts them.
+- Where an upgrade is attempted, both code paths fall back on any network error (refused included), on a
+  certificate error, and on a 3 second timer. Refused versus timed out makes no difference to whether Chrome
+  falls back, only to how long it takes.
+- An explicit https URL never falls back (Chromium ask-before-http guide), and HSTS overrides everything.
+Conclusion: stock desktop Chrome should load `<hostname>.local` over HTTP untouched. Something on that machine is
+handing Chrome an explicit https URL or a strict policy. "Keep 443 closed" is still right for automatic upgrades
+but does nothing for these cases, so the recommendation changes (below).
+
+Causes, most to least likely, what the user sees, and what the device can do:
+1. A remembered https URL: the address bar autocompletes `https://<hostname>.local` from history, a bookmark, a
+   shortcut or synced history, and that is an explicit https navigation. User sees ERR_CONNECTION_REFUSED.
+   Device side: only an answer on 443 helps (helper with a self-signed cert that redirects to `http://`: the
+   user sees a certificate warning, clicks Advanced then Proceed once, lands on the portal, and Chrome keeps
+   the exception for a while) or a trusted cert (local CA, option 2). User side: highlight the suggestion and
+   press Shift+Delete, fix the bookmark, or use the IP address.
+2. Strict mode or a policy: "Always use secure connections" on the public-and-private choice, or the
+   HttpsOnlyMode policy on a managed machine. Chrome tries HTTPS, gets refused, and shows a full-page "site
+   doesn't support a secure connection" warning with a Continue button (remembered about 15 days) rather than a
+   silent fallback. Device side: only a trusted cert removes it; a self-signed helper would swap that warning
+   for a certificate warning, no better. User side: Continue, switch to the public-sites choice, or allowlist
+   the host.
+3. An HSTS entry for the hostname in that profile (something once served HTTPS with that header under the same
+   name). Chrome redirects internally to https and never falls back; user sees ERR_CONNECTION_REFUSED. A
+   self-signed helper makes this worse (certificate errors cannot be bypassed under HSTS). Fix is on the
+   client: delete the domain under chrome://net-internals/#hsts. The portal itself never sends HSTS.
+4. An extension or security suite forcing HTTPS. Shows as fine in a Guest window, broken in the normal profile.
+5. A stable-channel experiment that differs from the source read above. Would show as failing in a clean Guest
+   window with default settings. NOT verified either way.
+Ruled out by the report itself: mDNS or LLMNR resolution, IPv6 versus the IPv4-only bind, and firewalls. The
+hand-edited `http://` URL loads, so the name resolves and port 80 is reachable from that machine; and since 443
+on the Pi refuses instantly, Chrome is not waiting on a dropped packet. The IPv4-only bind can still add a
+failed attempt per load, so the dual-stack bind stays in the plan as a tidy-up, not as the fix.
+
+Checks for Matt on the Windows machine, in this order:
+- The exact code on the failure page (ERR_CONNECTION_REFUSED, ERR_CONNECTION_TIMED_OUT, ERR_SSL_PROTOCOL_ERROR,
+  or a warning page with a Continue button), and whether the address shows https before or only after Enter.
+- A Guest window (profile menu, Guest; not Incognito, which still autocompletes from history): type the bare
+  name. Loads there means cause 1, 3 or 4. Fails there means cause 2 by policy, or cause 5.
+- chrome://settings/security: state of "Always use secure connections" and which of the two choices is selected.
+- chrome://policy: any HttpsOnlyMode, HttpsUpgradesEnabled or HttpAllowlist entries.
+- chrome://net-internals/#hsts, "Query HSTS/PKP domain" with the hostname: "Not found" rules out cause 3.
+- Type `http://` plus the device IP from the Info screen: should load in every case except strict mode.
+- chrome://version (version and channel), in case it is cause 5.
+
+Recommendation, revised:
+- Still first: the explicit `http://` QR, an IP-based URL shown next to the name, the dual-stack bind and the
+  no-HSTS test. These cover phones and anyone starting clean.
+- The 443 helper (self-signed cert plus redirect to `http://`) moves from "maybe" to "wanted if the checks
+  point to cause 1", because per the source above desktop Chrome in its default mode never probes 443 on a
+  `.local` name, so the helper cannot break a fallback there; it only catches explicit https. The open risk
+  moves to the browsers that do probe 443 (Chrome on iOS, Safari, Firefox): they must still fall back when 443
+  answers with an untrusted certificate. Chromium's desktop code falls back on certificate errors; iOS Chrome,
+  Safari and Firefox are NOT verified. That is the on-device test still waiting on Matt's permission for a
+  temporary 443 listener. Keep it behind `WEB_HTTPS_REDIRECT` (default 0) until that test passes.
+- If the checks point to strict mode, no redirect trick helps and the choices are the local CA (option 2) or
+  living with one Continue click every 15 days.
+Sources: Chromium main `components/omnibox/browser/autocomplete_input.cc`, `net/base/url_util.cc`,
+`chrome/browser/ssl/https_upgrades_interceptor.cc`, `https_upgrades_util.cc`,
+`typed_navigation_upgrade_throttle.cc`, `docs/security/ask-before-http/ask-before-http-adoption-guide.md`.
