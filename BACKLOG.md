@@ -364,6 +364,13 @@ Five phases, each a release to look at on the Pi:
   4h_held ~2.1, 4L_live_frame ~3.0, ~110 held items, ~33 changed rects a second. The 66 ms rate here (11 to 13 per
   minute at ~70 targets) is above the phase 2 figure (2 to 3 at ~57 targets, before fade and rim sprites); traffic
   differs, so phase 5 needs a same-hour smooth against classic comparison.
+- FIXED 2026-11-16 (release 2026.11.16.18), reported by Matt: targets brightened out of step with the beam. The
+  fast present path draws the beam at sweep minus the panel rotation, while a logical point lands at its bearing
+  plus the rotation (rotation._map_display_point), so on the Pi's 90 degree panel the latch fired half a turn from
+  the visible beam. radar._beam_bearing() now gives the beam as drawn (sweep minus twice the rotation); a test
+  derives that from the real mapping for 0, 90, 180 and 270. Screenshots on the Pi confirm bright paint directly
+  behind the beam. Lesson: check beam-relative behaviour on the rotated panel, not from logic in logical space; the
+  earlier screenshot checks only showed that fading varied by bearing, not that it was aligned.
 - Phase 5: final numbers, docs.
 Unrelated, seen 2026-11-16 in a fresh venv: tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart
 fails on its own on main (a pixel outside the chart differs); not from this work.
