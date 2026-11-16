@@ -241,6 +241,7 @@ def scene(monkeypatch):
     monkeypatch.setattr(radar, "_trail_selected_id", None)
     monkeypatch.setattr(radar, "_trail_projection_key", lambda size: "view")
     monkeypatch.setattr(radar, "current_sweep_angle", lambda: angle["deg"])
+    monkeypatch.setattr("display.round_touch.rotation.rotation_degrees", lambda: 0)
     monkeypatch.setattr(radar, "_flight_icon_color", lambda flight, compact: (255, 255, 255))
     monkeypatch.setattr(radar, "_live_glow_sprite", lambda *args: None)
     monkeypatch.setattr(radar, "_icon_vis", lambda st, heading: {})
@@ -984,3 +985,43 @@ class TestHeldUpdateWaitsForANewBase:
         rotation.present_radar_sweep(display, new, 2, 0.0, (0, 255, 0), draw_sweep=False, held=second)
         assert display.get_at((60, 60))[:3] == (40, 50, 60)
         assert display.get_at((120, 60))[:3] == (255, 0, 0)
+
+
+class TestBeamMatchesWhatIsDrawn:
+    """A target must repaint when the beam on the glass crosses it, whatever
+    the panel rotation."""
+
+    @pytest.mark.parametrize("rot", [0, 90, 180, 270])
+    @pytest.mark.parametrize("bearing", [20.0, 135.0, 250.0, 340.0])
+    def test_latch_bearing_is_where_the_drawn_beam_is(self, monkeypatch, rot, bearing):
+        import math
+
+        from display.round_touch import rotation
+
+        side = 720
+        monkeypatch.setattr(rotation.theme, "SIZE", side)
+        monkeypatch.setattr(rotation, "rotation_degrees", lambda: rot)
+        centre = (side - 1) / 2.0
+        rad = math.radians(bearing - 90.0)
+        lx, ly = centre + 300 * math.cos(rad), centre + 300 * math.sin(rad)
+        # Where the target lands on the glass, and its bearing there.
+        dx, dy = rotation._map_display_point(lx, ly, rot, (0, 0))
+        on_glass = radar_classic.bearing_deg(dx, dy, centre, centre)
+        # present_radar_sweep draws the beam at (sweep - rotation) on the glass.
+        sweep = (on_glass + rot) % 360.0
+        monkeypatch.setattr(radar, "current_sweep_angle", lambda: sweep)
+        diff = (radar._beam_bearing() - bearing + 180.0) % 360.0 - 180.0
+        assert abs(diff) < 0.5
+
+    def test_rotated_panel_latches_under_the_drawn_beam(self, scene, monkeypatch):
+        monkeypatch.setattr("display.round_touch.rotation.rotation_degrees", lambda: 90)
+        scene["frame"](0.0)
+        scene["move"]("south", 7)
+        # Raw sweep 181 would have latched "south" (bearing 180) before the fix.
+        scene["frame"](170.0)
+        scene["frame"](181.0)
+        assert scene["painted"]("south")[0] == scene["cx"]
+        # On a 90 degree panel the drawn beam is over bearing 180 at sweep 0.
+        scene["frame"](350.0)
+        scene["frame"](1.0)
+        assert scene["painted"]("south")[0] == scene["cx"] + 7

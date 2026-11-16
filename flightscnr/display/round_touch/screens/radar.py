@@ -1693,6 +1693,20 @@ def live_trail_connectors() -> list:
     return _live_connectors
 
 
+def _beam_bearing() -> float:
+    """Bearing of the beam as drawn, in the logical frame targets are placed in.
+
+    The fast present path draws the beam at ``sweep - rotation`` on the
+    display, while a logical point at bearing b lands at ``b + rotation``
+    (see rotation._map_display_point). On a rotated panel the two differ by
+    twice the rotation, so comparing targets with the raw sweep angle
+    repainted them half a turn away from the visible beam.
+    """
+    from display.round_touch import rotation
+
+    return (current_sweep_angle() - 2 * rotation.rotation_degrees()) % 360.0
+
+
 def _classic_due_ids(icons) -> list:
     """Targets to repaint this frame in classic motion, live ones first."""
     cx, cy = float(theme.CENTER_X), float(theme.CENTER_Y)
@@ -1725,7 +1739,7 @@ def _classic_due_ids(icons) -> list:
     ):
         _classic_repaint_at = None
         expire_frame_layer()
-    return _beam_latch.due(current_sweep_angle(), view, bearings, live)
+    return _beam_latch.due(_beam_bearing(), view, bearings, live)
 
 
 def _rim_spec(ident: str, flight, x: int, y: int, color, rim_style: str, heli_icon_form: bool):
