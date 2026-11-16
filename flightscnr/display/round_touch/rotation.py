@@ -55,9 +55,18 @@ _rim_rects_cache: dict = {}
 _held_base: pygame.Surface | None = None
 # key -> (item, rect on the base or None), in draw order.
 _held_items: dict = {}
-# More damage rects than this in one frame (a zoom, a new layer) and a full
-# restamp is cheaper than repainting each rect with everything that overlaps.
-_HELD_MAX_DAMAGE = 40
+# Changed rects covering more than this share of the base in one frame (a
+# zoom) and a full restamp is cheaper than repainting each rect with
+# everything that overlaps. Many tiny rects (trail tips) stay incremental.
+_HELD_MAX_DAMAGE_SHARE = 0.30
+_HELD_MAX_DAMAGE = 200
+# A new base needs every held target stamped onto it. Done in one frame that
+# was 15 to 30 ms on a Pi 4 every few seconds, the largest single cause of
+# slow frames in classic motion. It is staged instead: the old picture stays
+# up while a few targets are stamped per frame, then the bases swap.
+_HELD_STAGE_BUDGET_S = 0.003
+_held_stage: dict | None = None
+_held_spare: pygame.Surface | None = None
 # Rotated copies of live sprites, keyed by the sprite object. A bare id()
 # collides when pygame reuses a freed Surface address, which painted one
 # aircraft type with another's silhouette.
@@ -239,7 +248,7 @@ def present_radar_sweep(
     global _prev_airport_callout_rect, _prev_location_toast_rect
     global _prev_airport_tile_rect, _prev_lofi_rect, _prev_radial_rect
     global _prev_lofi_tile_rect, _prev_favourite_tile_rect, _prev_icon_rects
-    global _upload_y, _rim_prev_spec, _rim_prev_rects, _held_base
+    global _upload_y, _rim_prev_spec, _rim_prev_rects, _held_base, _held_stage
     from display.round_touch import draw
 
     had_layer = _rot_base is not None
@@ -251,6 +260,26 @@ def present_radar_sweep(
 
     stale = _rot_base is None or _rot_base_key != key
     swap_in = False
+    staged = False
+    if (
+        stale
+        and held is not None
+        and _held_base is not None
+        and _rot_base is not None
+        and not _needs_full
+    ):
+        # Classic motion: keep presenting the old base until the new one has
+        # its targets on it (see _held_stage_step).
+        if frame_debug.ENABLED:
+            _t = time.perf_counter()
+        if _held_stage_step(key, base_layer, rotation, held):
+            swap_in = True
+            staged = True
+        stale = False
+        if frame_debug.ENABLED:
+            frame_debug.stage("4h_stage", time.perf_counter() - _t)
+    elif _held_stage is not None:
+        _held_stage = None
     if stale and _next_base is not None and _next_base_key == key:
         # Rotation was prewarmed between frames; just swap it in.
         _rot_base = _next_base
@@ -304,13 +333,9 @@ def present_radar_sweep(
     else:
         if frame_debug.ENABLED:
             _t = time.perf_counter()
-        # A new base is one frame from swapping in and restamps everything.
-        # Its held set (new trail tips) belongs with it, not on the old base.
-        damage = (
-            []
-            if _pending_key is not None and _held_base is not None and not swap_in
-            else _held_update(held, rotation, rebuild=swap_in)
-        )
+        # A staged swap arrives with its targets stamped; only what changed
+        # since the stage began is left to do.
+        damage = _held_update(held, rotation, rebuild=swap_in and not staged)
         if damage is None:
             if not swap_in:
                 _needs_full = True
@@ -641,6 +666,73 @@ def _held_stamp(surface: pygame.Surface, rotation: int, key, item) -> None:
     surface.blit(img, img.get_rect(center=(dx, dy)))
 
 
+def shown_layer_gen():
+    """Generation of the radar layer the fast path is presenting, or None."""
+    return _rot_base_key[0] if _rot_base_key is not None else None
+
+
+def _held_stage_step(key, base_layer: pygame.Surface, rotation: int, held: list) -> bool:
+    """Stamp a few held targets onto the next base. True once it is swapped in.
+
+    The swap leaves ``_held_items`` as the set the stage started with, so the
+    caller's incremental update covers whatever the beam repainted meanwhile.
+    """
+    global _held_stage, _held_spare, _held_base, _held_items
+    global _rot_base, _rot_base_key, _next_base, _next_base_key, _pending_key
+    stage = _held_stage
+    if stage is None or stage["key"] != key:
+        if _next_base is not None and _next_base_key == key:
+            new = _next_base
+            _next_base = None
+            _next_base_key = None
+        else:
+            try:
+                new = (
+                    base_layer.copy()
+                    if rotation == 0
+                    else pygame.transform.rotate(base_layer, -rotation)
+                )
+            except pygame.error as exc:
+                # Published layer briefly locked by a concurrent rebuild.
+                if "locked" in str(exc).lower():
+                    return False
+                raise
+        surf = _held_spare
+        _held_spare = None
+        if surf is None or surf.get_size() != new.get_size():
+            surf = new.copy()
+        else:
+            surf.blit(new, (0, 0))
+        stage = _held_stage = {
+            "key": key, "base": new, "surf": surf,
+            "snap": list(held), "idx": 0, "table": {},
+        }
+        _pending_key = None
+    started = time.perf_counter()
+    snap = stage["snap"]
+    surf = stage["surf"]
+    table = stage["table"]
+    bounds = surf.get_rect()
+    first = idx = stage["idx"]
+    while idx < len(snap) and (
+        idx == first or time.perf_counter() - started < _HELD_STAGE_BUDGET_S
+    ):
+        item_key, item = snap[idx]
+        table[item_key] = (item, _held_rect(rotation, item_key, item, bounds))
+        _held_stamp(surf, rotation, item_key, item)
+        idx += 1
+    stage["idx"] = idx
+    if idx < len(snap):
+        return False
+    _held_spare = _held_base
+    _rot_base = stage["base"]
+    _rot_base_key = key
+    _held_base = surf
+    _held_items = table
+    _held_stage = None
+    return True
+
+
 def _held_same(a, b) -> bool:
     return a is b or a == b
 
@@ -676,7 +768,9 @@ def _held_update(held: list, rotation: int, *, rebuild: bool):
         for key, prev in old.items():
             if key not in table and prev[1] is not None:
                 damage.append(prev[1])
-        if len(damage) > _HELD_MAX_DAMAGE:
+        if len(damage) > _HELD_MAX_DAMAGE or sum(
+            r.w * r.h for r in damage
+        ) > _HELD_MAX_DAMAGE_SHARE * bounds.w * bounds.h:
             rebuild = True
     if rebuild:
         if _held_base is None or _held_base.get_size() != base.get_size():

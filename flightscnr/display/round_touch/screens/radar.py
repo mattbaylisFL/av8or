@@ -1471,6 +1471,10 @@ _classic_repaint_at: float | None = None
 _CLASSIC_REPAINT_SETTLE_S = 0.6
 # The trail-head table the held tips were last computed against.
 _held_tips_heads = None
+# Trail heads per layer generation. The display keeps presenting the old
+# layer for a few frames after a publish (the staged swap), and held tips must
+# match the trails actually on screen.
+_heads_by_gen: dict = {}
 # 4 ms: on a Pi 4 a refresh costs ~0.6 ms per target, so ~6 targets a frame and
 # each one every ~6 frames with 40 on screen. They move well under a pixel per
 # frame; at 6 ms the pass alone pushed busy frames past the 33 ms budget.
@@ -1490,6 +1494,9 @@ def _publish_live_specs() -> None:
     global _live_rim_targets
     if _live_pending is not None:
         _live_icons, _live_labels, _live_heads = _live_pending[:3]
+        _heads_by_gen[_frame_layer_gen] = _live_heads
+        for gen in [g for g in _heads_by_gen.copy() if g < _frame_layer_gen - 3]:
+            _heads_by_gen.pop(gen, None)
         _live_rim_targets = _live_pending[3] if len(_live_pending) > 3 else []
         keep = {st["id"] for st in _live_icons}
         _live_ids = keep
@@ -1999,11 +2006,16 @@ def live_icon_frame(now: float | None = None) -> list:
         }
     painted_now = set(processed_ids)
     global _held_tips_heads
-    if _live_heads is not _held_tips_heads:
-        # New layer: its trails now reach each painted position, so the old
-        # tips would draw over them. Work them out again against its heads.
-        _held_tips_heads = _live_heads
-        _held_tips.clear()
+    held_heads = _live_heads
+    if held is not None:
+        from display.round_touch import rotation
+
+        held_heads = _heads_by_gen.get(rotation.shown_layer_gen(), _live_heads)
+        if held_heads is not _held_tips_heads:
+            # New layer on screen: its trails now reach each painted position,
+            # so the old tips would draw over them. Work them out again.
+            _held_tips_heads = held_heads
+            _held_tips.clear()
     for ident in [key for key in _held_tips if key not in live_pos or key in moving]:
         _held_tips.pop(ident, None)
     for ident, (fx, fy) in live_pos.items():
@@ -2014,7 +2026,7 @@ def live_icon_frame(now: float | None = None) -> list:
                 held["c"].append((("c", ident), tip))
             continue
         tip = None
-        head = _live_heads.get(ident)
+        head = (held_heads if holds else _live_heads).get(ident)
         if head is not None:
             (bx, by), rgb, width = head
             if math.hypot(fx - bx, fy - by) >= 0.75:

@@ -438,6 +438,8 @@ def held_base(monkeypatch):
     monkeypatch.setattr(rotation, "_rot_base", base)
     monkeypatch.setattr(rotation, "_held_base", None)
     monkeypatch.setattr(rotation, "_held_items", {})
+    monkeypatch.setattr(rotation, "_held_stage", None)
+    monkeypatch.setattr(rotation, "_held_spare", None)
     monkeypatch.setattr(rotation.theme, "SIZE", 200)
     return rotation
 
@@ -527,15 +529,24 @@ class TestHeldBase:
         held_base._held_update(moved, 90, rebuild=True)
         assert pygame.image.tostring(held_base._held_base, "RGB") == incremental
 
-    def test_a_burst_of_changes_falls_back_to_a_full_restamp(self, held_base):
+    def test_a_large_changed_area_falls_back_to_a_full_restamp(self, held_base):
+        big = _dot((255, 0, 0, 255), 60)
+        start = [(("i", str(n)), (big, 40 + n * 60, 40)) for n in range(3)]
+        moved = [(("i", str(n)), (big, 40 + n * 60, 150)) for n in range(3)]
+        held_base._held_update(start, 0, rebuild=False)
+        assert held_base._held_update(moved, 0, rebuild=False) is None
+        assert held_base._held_base.get_at((40, 40))[:3] == (10, 20, 30)
+        assert held_base._held_base.get_at((40, 150))[:3] == (255, 0, 0)
+
+    def test_many_small_changes_stay_incremental(self, held_base):
         red = _dot((255, 0, 0, 255), 4)
         start = [(("i", str(n)), (red, 10 + n * 4, 20)) for n in range(30)]
         moved = [(("i", str(n)), (red, 10 + n * 4, 120)) for n in range(30)]
         held_base._held_update(start, 0, rebuild=False)
-        assert held_base._held_update(moved, 0, rebuild=False) is None
+        damage = held_base._held_update(moved, 0, rebuild=False)
+        assert damage is not None and len(damage) == 60
         assert held_base._held_base.get_at((10, 20))[:3] == (10, 20, 30)
         assert held_base._held_base.get_at((10, 120))[:3] == (255, 0, 0)
-
 
 @pytest.fixture
 def fresh_rotation(monkeypatch):
@@ -547,6 +558,7 @@ def fresh_rotation(monkeypatch):
         ("_needs_full", False), ("_prev_icon_rects", []), ("_upload_y", None),
         ("_rim_prev_spec", None), ("_rim_prev_rects", []),
         ("_held_base", None), ("_held_items", {}),
+        ("_held_stage", None), ("_held_spare", None),
     ):
         monkeypatch.setattr(rotation, name, value)
     for name in (
@@ -966,26 +978,116 @@ class TestClassicLayerCadence:
         assert expired == [1000.7]
 
 
-class TestHeldUpdateWaitsForANewBase:
-    def test_burst_on_the_old_base_is_held_back(self, fresh_rotation, monkeypatch):
-        rotation, calls = fresh_rotation
-        display = pygame.Surface((200, 200))
+class TestStagedBaseSwap:
+    """A new base gets its held targets a few per frame; the old picture
+    stays up until it is complete."""
+
+    def _bases(self):
         old = pygame.Surface((200, 200))
         old.fill((10, 20, 30))
         new = pygame.Surface((200, 200))
         new.fill((40, 50, 60))
-        red = _dot((255, 0, 0, 255))
-        first = [(("i", "a"), (red, 60, 60))]
-        second = [(("i", "a"), (red, 120, 60))]
-        rotation.present_radar_sweep(display, old, 1, 0.0, (0, 255, 0), draw_sweep=False, held=first)
-        # New layer generation: this frame only notes it, the swap is next frame.
-        rotation.present_radar_sweep(display, new, 2, 0.0, (0, 255, 0), draw_sweep=False, held=second)
-        assert display.get_at((60, 60))[:3] == (255, 0, 0)
-        assert display.get_at((120, 60))[:3] == (10, 20, 30)
-        rotation.present_radar_sweep(display, new, 2, 0.0, (0, 255, 0), draw_sweep=False, held=second)
-        assert display.get_at((60, 60))[:3] == (40, 50, 60)
-        assert display.get_at((120, 60))[:3] == (255, 0, 0)
+        return old, new
 
+    def _held(self, shift=0):
+        red = self.red
+        return [(("i", str(n)), (red, 20 + n * 30 + shift, 60)) for n in range(5)]
+
+    @pytest.fixture(autouse=True)
+    def sprite(self):
+        self.red = _dot((255, 0, 0, 255))
+
+    def _present(self, rotation, display, base, gen, held):
+        rotation.present_radar_sweep(
+            display, base, gen, 0.0, (0, 255, 0), draw_sweep=False, held=held
+        )
+
+    def test_old_picture_stays_until_every_target_is_stamped(self, fresh_rotation, monkeypatch):
+        rotation, _calls = fresh_rotation
+        monkeypatch.setattr(rotation, "_HELD_STAGE_BUDGET_S", 0.0)
+        display = pygame.Surface((200, 200))
+        old, new = self._bases()
+        self._present(rotation, display, old, 1, self._held())
+        for _frame in range(4):
+            self._present(rotation, display, new, 2, self._held())
+            assert display.get_at((100, 150))[:3] == (10, 20, 30)
+            assert rotation.shown_layer_gen() == 1
+        self._present(rotation, display, new, 2, self._held())
+        assert display.get_at((100, 150))[:3] == (40, 50, 60)
+        assert display.get_at((20, 60))[:3] == (255, 0, 0)
+        assert rotation.shown_layer_gen() == 2
+
+    def test_changes_during_the_stage_arrive_with_the_swap(self, fresh_rotation, monkeypatch):
+        rotation, _calls = fresh_rotation
+        monkeypatch.setattr(rotation, "_HELD_STAGE_BUDGET_S", 0.0)
+        display = pygame.Surface((200, 200))
+        old, new = self._bases()
+        self._present(rotation, display, old, 1, self._held())
+        self._present(rotation, display, new, 2, self._held())
+        # The beam repaints everything 10 px along while the stage runs.
+        for _frame in range(4):
+            self._present(rotation, display, new, 2, self._held(10))
+        staged = pygame.image.tostring(display, "RGB")
+        assert display.get_at((20, 60))[:3] == (40, 50, 60) or display.get_at((30, 60))[:3] == (255, 0, 0)
+        # Same end state as stamping everything in one go.
+        for name in ("_rot_base", "_rot_base_key", "_held_base", "_held_stage", "_held_spare"):
+            monkeypatch.setattr(rotation, name, None)
+        monkeypatch.setattr(rotation, "_held_items", {})
+        monkeypatch.setattr(rotation, "_prev_icon_rects", [])
+        direct = pygame.Surface((200, 200))
+        self._present(rotation, direct, new, 2, self._held(10))
+        assert pygame.image.tostring(direct, "RGB") == staged
+
+    def test_a_newer_layer_restarts_the_stage(self, fresh_rotation, monkeypatch):
+        rotation, _calls = fresh_rotation
+        monkeypatch.setattr(rotation, "_HELD_STAGE_BUDGET_S", 0.0)
+        display = pygame.Surface((200, 200))
+        old, new = self._bases()
+        newer = pygame.Surface((200, 200))
+        newer.fill((70, 80, 90))
+        self._present(rotation, display, old, 1, self._held())
+        self._present(rotation, display, new, 2, self._held())
+        for _frame in range(5):
+            self._present(rotation, display, newer, 3, self._held())
+        assert display.get_at((100, 150))[:3] == (70, 80, 90)
+        assert rotation.shown_layer_gen() == 3
+
+    def test_a_small_scene_swaps_in_one_frame(self, fresh_rotation):
+        rotation, _calls = fresh_rotation
+        display = pygame.Surface((200, 200))
+        old, new = self._bases()
+        self._present(rotation, display, old, 1, self._held())
+        self._present(rotation, display, new, 2, self._held())
+        assert display.get_at((100, 150))[:3] == (40, 50, 60)
+
+    def test_smooth_motion_swaps_as_before(self, fresh_rotation):
+        rotation, _calls = fresh_rotation
+        display = pygame.Surface((200, 200))
+        old, new = self._bases()
+        rotation.present_radar_sweep(display, old, 1, 0.0, (0, 255, 0), draw_sweep=False)
+        rotation.present_radar_sweep(display, new, 2, 0.0, (0, 255, 0), draw_sweep=False)
+        rotation.present_radar_sweep(display, new, 2, 0.0, (0, 255, 0), draw_sweep=False)
+        assert display.get_at((100, 150))[:3] == (40, 50, 60)
+        assert rotation._held_stage is None
+
+
+class TestTipsFollowTheShownLayer:
+    def test_tips_keep_the_old_heads_until_the_new_layer_is_shown(self, scene, monkeypatch):
+        from display.round_touch import rotation
+
+        cx, cy = scene["cx"], scene["cy"]
+        old_heads = {"south": ((cx, cy + 90.0), (9, 9, 9), 2)}
+        new_heads = {"south": ((cx, cy + 100.0), (9, 9, 9), 2)}
+        monkeypatch.setattr(radar, "_heads_by_gen", {1: old_heads, 2: new_heads})
+        monkeypatch.setattr(radar, "_live_heads", new_heads)
+        monkeypatch.setattr(rotation, "_rot_base_key", (1, 0, 720))
+        scene["frame"](0.0)
+        assert ("c", "south") in dict(radar.live_held_frame())
+        scene["frame"](5.0)
+        assert ("c", "south") in dict(radar.live_held_frame())
+        monkeypatch.setattr(rotation, "_rot_base_key", (2, 0, 720))
+        scene["frame"](10.0)
+        assert ("c", "south") not in dict(radar.live_held_frame())
 
 class TestBeamMatchesWhatIsDrawn:
     """A target must repaint when the beam on the glass crosses it, whatever
