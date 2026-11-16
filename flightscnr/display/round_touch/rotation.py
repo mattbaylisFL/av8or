@@ -304,7 +304,13 @@ def present_radar_sweep(
     else:
         if frame_debug.ENABLED:
             _t = time.perf_counter()
-        damage = _held_update(held, rotation, rebuild=swap_in)
+        # A new base is one frame from swapping in and restamps everything.
+        # Its held set (new trail tips) belongs with it, not on the old base.
+        damage = (
+            []
+            if _pending_key is not None and _held_base is not None and not swap_in
+            else _held_update(held, rotation, rebuild=swap_in)
+        )
         if damage is None:
             if not swap_in:
                 _needs_full = True

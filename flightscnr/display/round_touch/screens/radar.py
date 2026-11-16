@@ -84,6 +84,11 @@ def _configured_layer_ttl() -> float:
             pass
     if not live_icons_enabled():
         return 0.2
+    if settings.classic_radar_enabled():
+        # Nothing on the layer moves between passes: targets, tags and trail
+        # tips are painted by the beam. One rebuild a rotation picks up new
+        # traffic and bakes the trail behind each painted position.
+        return theme.SWEEP_PERIOD_MS / 1000.0
     # Icons, tags, and halos already move every frame. Rebuilding this base
     # just to rotate it is what makes the sweep hitch. Trails are the baked
     # piece that still ages; a live line covers the gap until the next bake.
@@ -112,6 +117,8 @@ _LIVE_LAYER_TTL_MAX_S = 4.0
 def _layer_ttl_s() -> float:
     ttl = max(_configured_layer_ttl(), _layer_build_cost_s * 3.0)
     cap = _LIVE_LAYER_TTL_MAX_S if live_icons_enabled() else _FRAME_LAYER_TTL_MAX_S
+    if settings.classic_radar_enabled():
+        cap = max(cap, theme.SWEEP_PERIOD_MS / 1000.0)
     ttl = min(ttl, cap)
     # Rim pulse is ~2Hz; keep the baked stroke in sync without leaving the
     # fast dirty-rect present path. Live icons already move every frame, and
@@ -1457,6 +1464,20 @@ _fade_cache: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 # Filled by the layer worker when it prunes a target, drained by the display.
 _ghosts: dict = {}
 _classic_view = None
+# Classic motion: out-of-range rim targets as sprites, so the beam paints them
+# too. The layer worker renders one spec per target ({"id", "xy", "item"});
+# the display keeps what it last painted: {id: (item, painted_at, xy)}.
+_rim_building: list | None = None
+_live_rim_targets: list = []
+_rim_painted: dict = {}
+_RIM_KEY = "rim:"
+# A zoom or pan repaints every target over a few frames. The layer built in
+# that moment has no trails for them yet, so ask for another once they are
+# painted (time.time() of the repaint, or None).
+_classic_repaint_at: float | None = None
+_CLASSIC_REPAINT_SETTLE_S = 0.6
+# The trail-head table the held tips were last computed against.
+_held_tips_heads = None
 # 4 ms: on a Pi 4 a refresh costs ~0.6 ms per target, so ~6 targets a frame and
 # each one every ~6 frames with 40 on screen. They move well under a pixel per
 # frame; at 6 ms the pass alone pushed busy frames past the 33 ms budget.
@@ -1466,15 +1487,17 @@ _LIVE_FRAME_BUDGET_S = 0.004
 def _set_pending_live_specs(icons, labels) -> None:
     global _live_pending
     if icons is None:
-        _live_pending = ([], [], {})
+        _live_pending = ([], [], {}, [])
     else:
-        _live_pending = (icons, labels, dict(_trail_heads_building))
+        _live_pending = (icons, labels, dict(_trail_heads_building), list(_rim_building or ()))
 
 
 def _publish_live_specs() -> None:
     global _live_icons, _live_labels, _live_heads, _live_frame_cursor, _live_ids
+    global _live_rim_targets
     if _live_pending is not None:
-        _live_icons, _live_labels, _live_heads = _live_pending
+        _live_icons, _live_labels, _live_heads = _live_pending[:3]
+        _live_rim_targets = _live_pending[3] if len(_live_pending) > 3 else []
         keep = {st["id"] for st in _live_icons}
         _live_ids = keep
         ghosts = _CLASSIC_FADE and settings.classic_radar_enabled()
@@ -1691,13 +1714,87 @@ def _classic_due_ids(icons) -> list:
         bearings[ident] = radar_classic.bearing_deg(x, y, cx, cy)
         if st.get("live") or ident == _trail_selected_id:
             live.append(ident)
-    global _classic_view
+    for spec in _live_rim_targets:
+        painted = _rim_painted.get(spec["id"])
+        x, y = painted[2] if painted is not None else spec["xy"]
+        bearings[_RIM_KEY + spec["id"]] = radar_classic.bearing_deg(x, y, cx, cy)
+    global _classic_view, _classic_repaint_at
     view = _trail_projection_key((theme.SIZE, theme.SIZE))
     if view != _classic_view:
         # Old paint belongs to the old zoom or pan.
         _classic_view = view
         _ghosts.clear()
+        _rim_painted.clear()
+        _classic_repaint_at = time.time()
+    elif (
+        _classic_repaint_at is not None
+        and time.time() - _classic_repaint_at >= _CLASSIC_REPAINT_SETTLE_S
+    ):
+        _classic_repaint_at = None
+        expire_frame_layer()
     return _beam_latch.due(current_sweep_angle(), view, bearings, live)
+
+
+def _rim_spec(ident: str, flight, x: int, y: int, color, rim_style: str, heli_icon_form: bool):
+    """One rim target drawn into its own sprite, as the layer would draw it."""
+    if rim_style == "dot":
+        r_blip = max(
+            2, int(round(theme.RIM_BLIP_RADIUS * settings.blip_size_pct() / 100.0))
+        )
+        reach = r_blip
+        glow_r = _alert_glow_radius(flight, compact=True, rim_dot_r=r_blip, blooming=True)
+    else:
+        r_blip = None
+        reach = theme.s(11) * 2
+        glow_r = _alert_glow_radius(flight, compact=True, blooming=True)
+    half = int(max(reach, glow_r if _blip_wants_glow(flight) else 0)) + 6
+    sprite = pygame.Surface((half * 2, half * 2), pygame.SRCALPHA)
+    # Painted at its bright phase: it holds until the next pass.
+    _paint_blip_glow(
+        sprite, half, half, flight, color,
+        compact=True, pulse_on=True, rim_dot_r=r_blip,
+    )
+    if rim_style == "dot":
+        blip_rgb = settings.blip_color() or color
+        alpha = int(255 * min(100, settings.blip_opacity()) / 100)
+        dot = pygame.Surface((r_blip * 2, r_blip * 2), pygame.SRCALPHA)
+        pygame.draw.circle(dot, (*blip_rgb[:3], alpha), (r_blip, r_blip), r_blip)
+        sprite.blit(dot, (half - r_blip, half - r_blip))
+    else:
+        aircraft.draw_plane_icon(
+            sprite, half, half,
+            geo.screen_heading(flight.get("heading") or 0),
+            color, compact=True, flight=flight,
+        )
+    box = sprite.get_bounding_rect()
+    if box.w <= 0 or box.h <= 0:
+        return None
+    cut = sprite.subsurface(box).copy()
+    cx = x - half + box.x + box.w // 2
+    cy = y - half + box.y + box.h // 2
+    return {"id": ident, "xy": (x, y), "item": _clip_to_display(cut, cx, cy)}
+
+
+def _classic_rim_items(now: float, due: set) -> list:
+    """Held items for the rim targets; ``due`` ones take their latest sprite."""
+    specs = _live_rim_targets
+    current = set()
+    for spec in specs:
+        ident = spec["id"]
+        current.add(ident)
+        if ident in due:
+            _rim_painted[ident] = (spec["item"], now, spec["xy"])
+    for ident in [key for key in _rim_painted if key not in current]:
+        # A target that came into range keeps its rim paint until the beam
+        # paints it as an in-range icon; otherwise it would blink out.
+        if ident in _live_ids and ident not in _live_frame_cache:
+            continue
+        _rim_painted.pop(ident, None)
+    out = []
+    for ident, (item, painted_at, _xy) in _rim_painted.items():
+        sprite, x, y = item
+        out.append(((("r", ident)), (_faded(sprite, _fade_level_at(painted_at, now)), x, y)))
+    return out
 
 
 def _faded(sprite: pygame.Surface, level: int, *, holds_floor: bool = True):
@@ -1751,6 +1848,18 @@ def _ghost_items(now: float) -> list:
     return out
 
 
+def _split_rim_due(due: list) -> tuple[list, set]:
+    """Beam-latch ids split into in-range ids (order kept) and rim ids."""
+    inner = []
+    rim = set()
+    for ident in due:
+        if ident.startswith(_RIM_KEY):
+            rim.add(ident[len(_RIM_KEY):])
+        else:
+            inner.append(ident)
+    return inner, rim
+
+
 def live_held_frame() -> list | None:
     """Held targets published by the latest ``live_icon_frame`` (classic motion)."""
     return _held_frame
@@ -1767,9 +1876,14 @@ def live_icon_frame(now: float | None = None) -> list:
     icons = _live_icons
     if not icons:
         now = time.time() if now is None else now
-        _held_frame = _ghost_items(now) if settings.classic_radar_enabled() else None
-        if _held_frame is None:
+        if settings.classic_radar_enabled():
+            rim_due = _split_rim_due(_classic_due_ids([]))[1]
+            _held_frame = _ghost_items(now) + _classic_rim_items(now, rim_due)
+            _beam_latch.painted([_RIM_KEY + ident for ident in rim_due])
+        else:
+            _held_frame = None
             _ghosts.clear()
+            _rim_painted.clear()
         _held_tips.clear()
         _label_hits.clear()
         _live_frame_cache.clear()
@@ -1789,7 +1903,7 @@ def live_icon_frame(now: float | None = None) -> list:
     if classic:
         # Only what the sweep reached this frame, plus tracked and selected
         # aircraft. Everything else keeps the sprite it was painted with.
-        update_ids = _classic_due_ids(icons)
+        update_ids, rim_due = _split_rim_due(_classic_due_ids(icons))
     else:
         # New targets are prepared first. Existing targets advance in a
         # round-robin bounded by wall time, spreading dense-scene work over
@@ -1856,6 +1970,7 @@ def live_icon_frame(now: float | None = None) -> list:
         map_bg.end_projection_batch()
     if classic:
         _beam_latch.painted(processed_ids)
+        _beam_latch.painted([_RIM_KEY + ident for ident in rim_due])
 
     # The layer-prewarm worker prunes this cache when it publishes a new target
     # set. Iterating the shared dict directly can raise "dictionary changed
@@ -1876,6 +1991,12 @@ def live_icon_frame(now: float | None = None) -> list:
             if st.get("live") or st["id"] == _trail_selected_id
         }
     painted_now = set(processed_ids)
+    global _held_tips_heads
+    if _live_heads is not _held_tips_heads:
+        # New layer: its trails now reach each painted position, so the old
+        # tips would draw over them. Work them out again against its heads.
+        _held_tips_heads = _live_heads
+        _held_tips.clear()
     for ident in [key for key in _held_tips if key not in live_pos or key in moving]:
         _held_tips.pop(ident, None)
     for ident, (fx, fy) in live_pos.items():
@@ -1982,9 +2103,11 @@ def live_icon_frame(now: float | None = None) -> list:
     if held is None:
         _held_frame = None
         _ghosts.clear()
+        _rim_painted.clear()
     else:
         _held_frame = (
-            held["c"] + _ghost_items(now) + held["g"] + held["i"] + held["l"]
+            held["c"] + _ghost_items(now) + _classic_rim_items(now, rim_due)
+            + held["g"] + held["i"] + held["l"]
         )
     return out
 
@@ -2055,6 +2178,7 @@ def _draw_trails(surface, items) -> None:
     project = lambda lat, lon: geo.lat_lon_to_screen(lat, lon)
     proj_key = _trail_projection_key(surface.get_size())
     drawn = set()
+    classic = live_icons_enabled() and settings.classic_radar_enabled()
     _trail_heads_building = {}
     for _, flight, (x, y) in items:
         if flight.get("kind") == "vessel":
@@ -2062,9 +2186,18 @@ def _draw_trails(surface, items) -> None:
         ident = position_smooth.identity_of(flight)
         if not ident:
             continue
-        if mode != "all" and not (ident == _trail_selected_id or _is_tracked(flight)):
+        moving = ident == _trail_selected_id or _is_tracked(flight)
+        if mode != "all" and not moving:
             continue
         drawn.add(ident)
+        if classic and not moving:
+            # The trail grows on the pass: it ends where the target is
+            # painted, not where the data has it now. No paint yet (new
+            # traffic waiting for the beam) means no trail yet either.
+            cached = _live_frame_cache.get(ident)
+            if cached is None:
+                continue
+            x, y = int(round(cached[0][0])), int(round(cached[0][1]))
         if overlay is None:
             overlay = _trail_overlay_surface(surface.get_size())
         flight_trails.draw_trail(
@@ -2413,6 +2546,8 @@ def _draw_flights(surface, flights, live=None, live_labels=None):
     heli_any = False
     heli_icon_form = settings.target_form("heli") == "icon"
     classic_live = live is not None and settings.classic_radar_enabled()
+    global _rim_building
+    _rim_building = [] if classic_live else None
     map_bg.begin_projection_batch()
     try:
         rim_items: list[tuple[float, dict, tuple[int, int]]] = []
@@ -2459,8 +2594,20 @@ def _draw_flights(surface, flights, live=None, live_labels=None):
         _sub = frame_debug.mark("2r_f_rim")
         # Hoisted: one config read per pass, not one per rim target.
         rim_style = settings.rim_target_style()
+        from display.round_touch import position_smooth
+
         for _, flight, (x, y) in rim_items:
             color = _flight_icon_color(flight, compact=True)
+            if classic_live:
+                # Classic motion: a sprite the beam paints, not a baked blip.
+                ident = position_smooth.identity_of(flight)
+                spec = (
+                    _rim_spec(ident, flight, x, y, color, rim_style, heli_icon_form)
+                    if ident else None
+                )
+                if spec is not None:
+                    _rim_building.append(spec)
+                    continue
             if rim_style == "dot":
                 # Whole dot centred inside the rim; apply_round_bezel() crops
                 # the overhang, leaving a D flat against the display edge.
@@ -2933,6 +3080,9 @@ def _tap_xy(flight) -> tuple[int, int] | None:
             cached = _live_frame_cache.get(ident)
             if cached is not None:
                 return int(round(cached[0][0])), int(round(cached[0][1]))
+            rim = _rim_painted.get(ident)
+            if rim is not None:
+                return int(rim[2][0]), int(rim[2][1])
             if ident in _live_ids:
                 return None
     return _flight_screen_xy(flight)

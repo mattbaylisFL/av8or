@@ -230,6 +230,10 @@ def scene(monkeypatch):
     monkeypatch.setattr(radar, "_beam_latch", radar_classic.BeamLatch())
     monkeypatch.setattr(radar, "_held_tips", {})
     monkeypatch.setattr(radar, "_ghosts", {})
+    monkeypatch.setattr(radar, "_rim_painted", {})
+    monkeypatch.setattr(radar, "_live_rim_targets", [])
+    monkeypatch.setattr(radar, "_held_tips_heads", None)
+    monkeypatch.setattr(radar, "_classic_repaint_at", None)
     monkeypatch.setattr(radar, "_classic_view", None)
     monkeypatch.setattr(radar, "_CLASSIC_FADE", True)
     monkeypatch.setattr(theme, "SWEEP_PERIOD_MS", 6000)
@@ -286,11 +290,21 @@ class TestClassicLiveFrame:
         monkeypatch.setattr(radar, "_live_heads", {"south": ((cx, cy + 90.0), (9, 9, 9), 2)})
         scene["frame"](0.0)
         tip = dict(radar.live_held_frame())[("c", "south")]
-        monkeypatch.setattr(radar, "_live_heads", {"south": ((cx, cy + 95.0), (9, 9, 9), 2)})
+        scene["move"]("south", 30)
         scene["frame"](10.0)
         assert dict(radar.live_held_frame())[("c", "south")] is tip
         scene["frame"](181.0)
-        assert dict(radar.live_held_frame())[("c", "south")][1] == cy + 95.0
+        assert dict(radar.live_held_frame())[("c", "south")][2] == cx + 30
+
+    def test_new_layer_recomputes_tips_against_its_trail_heads(self, scene, monkeypatch):
+        cx, cy = scene["cx"], scene["cy"]
+        monkeypatch.setattr(radar, "_live_heads", {"south": ((cx, cy + 90.0), (9, 9, 9), 2)})
+        scene["frame"](0.0)
+        assert ("c", "south") in dict(radar.live_held_frame())
+        # The next layer bakes the trail right up to the painted position.
+        monkeypatch.setattr(radar, "_live_heads", {"south": ((cx, cy + 100.0), (9, 9, 9), 2)})
+        scene["frame"](10.0)
+        assert ("c", "south") not in dict(radar.live_held_frame())
 
     def test_other_motions_publish_no_held_frame(self, scene, monkeypatch):
         monkeypatch.setattr(settings, "classic_radar_enabled", lambda: False)
@@ -765,3 +779,206 @@ class TestDepartedTargetsFadeOut:
         radar._publish_live_specs()
         assert scene["frame"](10.0, now=100.5) == []
         assert len(radar.live_held_frame()) == 3
+
+
+def _rim(ident, x, y, color=(255, 255, 255, 255)):
+    return {"id": ident, "xy": (x, y), "item": (_dot(color), x, y)}
+
+
+class TestRimTargetsOnTheBeam:
+    def test_rim_target_appears_on_its_first_pass(self, scene, monkeypatch):
+        cx, cy = scene["cx"], scene["cy"]
+        scene["frame"](0.0, now=100.0)
+        monkeypatch.setattr(radar, "_live_rim_targets", [_rim("far", cx, cy + 300)])
+        scene["frame"](90.0, now=101.0)
+        assert ("r", "far") not in dict(radar.live_held_frame())
+        scene["frame"](181.0, now=102.0)
+        assert ("r", "far") in dict(radar.live_held_frame())
+
+    def test_rim_target_holds_its_place_until_the_pass(self, scene, monkeypatch):
+        cx, cy = scene["cx"], scene["cy"]
+        monkeypatch.setattr(radar, "_live_rim_targets", [_rim("far", cx, cy + 300)])
+        scene["frame"](0.0, now=100.0)
+        monkeypatch.setattr(radar, "_live_rim_targets", [_rim("far", cx + 40, cy + 298)])
+        scene["frame"](90.0, now=100.5)
+        assert dict(radar.live_held_frame())[("r", "far")][1:] == (cx, cy + 300)
+        scene["frame"](181.0, now=101.0)
+        assert dict(radar.live_held_frame())[("r", "far")][1:] == (cx + 40, cy + 298)
+
+    def test_rim_target_fades_like_the_rest(self, scene, monkeypatch):
+        cx, cy = scene["cx"], scene["cy"]
+        monkeypatch.setattr(radar, "_live_rim_targets", [_rim("far", cx, cy + 300)])
+        scene["frame"](0.0, now=100.0)
+        scene["frame"](90.0, now=103.0)
+        assert dict(radar.live_held_frame())[("r", "far")][0].get_at((2, 2))[3] < 255
+
+    def test_rim_targets_sit_under_in_range_icons(self, scene, monkeypatch):
+        monkeypatch.setattr(radar, "_live_rim_targets", [_rim("far", scene["cx"], scene["cy"] + 300)])
+        scene["frame"](0.0, now=100.0)
+        kinds = [key[0] for key, _item in radar.live_held_frame()]
+        assert kinds.index("r") < kinds.index("i")
+
+    def test_rim_target_leaving_the_data_is_removed(self, scene, monkeypatch):
+        monkeypatch.setattr(radar, "_live_rim_targets", [_rim("far", scene["cx"], scene["cy"] + 300)])
+        scene["frame"](0.0, now=100.0)
+        monkeypatch.setattr(radar, "_live_rim_targets", [])
+        scene["frame"](10.0, now=100.5)
+        assert ("r", "far") not in dict(radar.live_held_frame())
+
+    def test_rim_paint_stays_until_the_in_range_icon_is_painted(self, scene, monkeypatch):
+        cx, cy = scene["cx"], scene["cy"]
+        monkeypatch.setattr(radar, "_live_rim_targets", [_rim("late", cx, cy + 300)])
+        scene["frame"](0.0, now=100.0)
+        # It comes into range: no rim spec now, an in-range icon waiting for the beam.
+        monkeypatch.setattr(radar, "_live_rim_targets", [])
+        scene["icons"].append({
+            "id": "late", "xy": (cx, cy + 80), "flight": {"heading": 0},
+            "color": (255, 255, 255), "vis": None,
+        })
+        monkeypatch.setattr(radar, "_live_ids", {st["id"] for st in scene["icons"]})
+        scene["frame"](90.0, now=101.0)
+        assert ("r", "late") in dict(radar.live_held_frame())
+        scene["frame"](181.0, now=102.0)
+        held = dict(radar.live_held_frame())
+        assert ("i", "late") in held and ("r", "late") not in held
+
+    def test_rim_targets_alone_still_follow_the_beam(self, scene, monkeypatch):
+        cx, cy = scene["cx"], scene["cy"]
+        monkeypatch.setattr(radar, "_live_icons", [])
+        monkeypatch.setattr(radar, "_live_rim_targets", [_rim("far", cx, cy + 300)])
+        scene["frame"](0.0, now=100.0)
+        monkeypatch.setattr(radar, "_live_rim_targets", [_rim("far", cx + 40, cy + 298)])
+        scene["frame"](90.0, now=100.5)
+        assert dict(radar.live_held_frame())[("r", "far")][1:] == (cx, cy + 300)
+        scene["frame"](181.0, now=101.0)
+        assert dict(radar.live_held_frame())[("r", "far")][1:] == (cx + 40, cy + 298)
+
+    def test_tap_finds_the_painted_rim_position(self, monkeypatch):
+        from display.round_touch import position_smooth
+
+        flight = {"callsign": "TEST123", "hex": "abc123"}
+        ident = position_smooth.identity_of(flight)
+        monkeypatch.setattr(settings, "classic_radar_enabled", lambda: True)
+        monkeypatch.setattr(radar, "_live_frame_cache", {})
+        monkeypatch.setattr(radar, "_rim_painted", {ident: ((None, 0, 0), 1.0, (640, 200))})
+        monkeypatch.setattr(radar, "_flight_screen_xy", lambda flight: (600, 300))
+        assert radar._tap_xy(flight) == (640, 200)
+
+    def test_rim_sprite_is_cut_to_its_ink_and_keeps_its_centre(self, monkeypatch):
+        monkeypatch.setattr(radar, "_blip_wants_glow", lambda flight: False)
+        monkeypatch.setattr(settings, "blip_color", lambda: (10, 200, 30))
+        monkeypatch.setattr(settings, "blip_size_pct", lambda: 100)
+        monkeypatch.setattr(settings, "blip_opacity", lambda: 100)
+        monkeypatch.setattr(radar, "_clip_to_display", lambda sprite, x, y: (sprite, x, y))
+        spec = radar._rim_spec("far", {}, 300, 200, (255, 255, 255), "dot", False)
+        sprite, x, y = spec["item"]
+        r = max(2, int(round(theme.RIM_BLIP_RADIUS)))
+        assert sprite.get_width() <= 2 * r + 1
+        assert abs(x - 300) <= 1 and abs(y - 200) <= 1
+        assert sprite.get_at((sprite.get_width() // 2, sprite.get_height() // 2))[:3] == (10, 200, 30)
+
+
+class TestTrailsEndAtThePaintedPosition:
+    @pytest.fixture
+    def trails(self, monkeypatch):
+        from display.round_touch import flight_trails, position_smooth
+
+        heads = []
+        monkeypatch.setattr(settings, "flight_trails_mode", lambda: "all")
+        monkeypatch.setattr(radar, "live_icons_enabled", lambda: True)
+        monkeypatch.setattr(radar, "_is_tracked", lambda flight: False)
+        monkeypatch.setattr(radar, "_trail_selected_id", None)
+        monkeypatch.setattr(radar, "_trail_projection_key", lambda size: "view")
+        monkeypatch.setattr(position_smooth, "identity_of", lambda flight: flight["id"])
+        monkeypatch.setattr(flight_trails, "points", lambda ident: [(0, 0, 300, 0, 0, False)])
+        monkeypatch.setattr(flight_trails, "identities", lambda: [])
+        monkeypatch.setattr(flight_trails, "prune_projection_cache", lambda keep: None)
+        monkeypatch.setattr(
+            flight_trails, "draw_trail",
+            lambda overlay, ident, project, **kw: heads.append((ident, kw["head_xy"])),
+        )
+        return heads
+
+    def _draw(self):
+        surface = pygame.Surface((64, 64), pygame.SRCALPHA)
+        radar._draw_trails(surface, [(1.0, {"id": "a"}, (50, 50))])
+
+    def test_trail_stops_where_the_target_is_painted(self, trails, monkeypatch):
+        monkeypatch.setattr(settings, "classic_radar_enabled", lambda: True)
+        monkeypatch.setattr(radar, "_live_frame_cache", {"a": ((40.4, 44.6), None, None, 1.0)})
+        self._draw()
+        assert trails == [("a", (40, 45))]
+        assert radar._trail_heads_building["a"][0] == (40, 45)
+
+    def test_unpainted_target_has_no_trail_yet(self, trails, monkeypatch):
+        monkeypatch.setattr(settings, "classic_radar_enabled", lambda: True)
+        monkeypatch.setattr(radar, "_live_frame_cache", {})
+        self._draw()
+        assert trails == []
+        assert "a" not in radar._trail_heads_building
+
+    def test_selected_target_keeps_its_trail_to_the_data_position(self, trails, monkeypatch):
+        monkeypatch.setattr(settings, "classic_radar_enabled", lambda: True)
+        monkeypatch.setattr(radar, "_trail_selected_id", "a")
+        monkeypatch.setattr(radar, "_live_frame_cache", {"a": ((40.0, 45.0), None, None, 1.0)})
+        self._draw()
+        assert trails == [("a", (50, 50))]
+
+    def test_smooth_motion_is_unchanged(self, trails, monkeypatch):
+        monkeypatch.setattr(settings, "classic_radar_enabled", lambda: False)
+        monkeypatch.setattr(radar, "_live_frame_cache", {"a": ((40.0, 45.0), None, None, 1.0)})
+        self._draw()
+        assert trails == [("a", (50, 50))]
+
+
+class TestClassicLayerCadence:
+    def test_one_rebuild_per_rotation(self, monkeypatch):
+        monkeypatch.delenv("FLIGHTSCNR_LAYER_TTL", raising=False)
+        monkeypatch.setattr(radar, "live_icons_enabled", lambda: True)
+        monkeypatch.setattr(settings, "classic_radar_enabled", lambda: True)
+        monkeypatch.setattr(theme, "SWEEP_PERIOD_MS", 6000)
+        monkeypatch.setattr(radar, "_layer_build_cost_s", 0.0)
+        assert radar._layer_ttl_s() == pytest.approx(6.0)
+
+    def test_smooth_keeps_its_cadence(self, monkeypatch):
+        monkeypatch.delenv("FLIGHTSCNR_LAYER_TTL", raising=False)
+        monkeypatch.setattr(radar, "live_icons_enabled", lambda: True)
+        monkeypatch.setattr(settings, "classic_radar_enabled", lambda: False)
+        monkeypatch.setattr(settings, "flight_trails_mode", lambda: "all")
+        monkeypatch.setattr(radar, "_layer_build_cost_s", 0.0)
+        assert radar._layer_ttl_s() == pytest.approx(4.0)
+
+    def test_view_change_asks_for_a_layer_with_trails_once_painted(self, scene, monkeypatch):
+        expired = []
+        clock = {"t": 1000.0}
+        monkeypatch.setattr(radar, "expire_frame_layer", lambda: expired.append(clock["t"]))
+        monkeypatch.setattr(radar.time, "time", lambda: clock["t"])
+        scene["frame"](0.0)
+        clock["t"] += 0.2
+        scene["frame"](5.0)
+        assert expired == []
+        clock["t"] += 0.5
+        scene["frame"](10.0)
+        scene["frame"](15.0)
+        assert expired == [1000.7]
+
+
+class TestHeldUpdateWaitsForANewBase:
+    def test_burst_on_the_old_base_is_held_back(self, fresh_rotation, monkeypatch):
+        rotation, calls = fresh_rotation
+        display = pygame.Surface((200, 200))
+        old = pygame.Surface((200, 200))
+        old.fill((10, 20, 30))
+        new = pygame.Surface((200, 200))
+        new.fill((40, 50, 60))
+        red = _dot((255, 0, 0, 255))
+        first = [(("i", "a"), (red, 60, 60))]
+        second = [(("i", "a"), (red, 120, 60))]
+        rotation.present_radar_sweep(display, old, 1, 0.0, (0, 255, 0), draw_sweep=False, held=first)
+        # New layer generation: this frame only notes it, the swap is next frame.
+        rotation.present_radar_sweep(display, new, 2, 0.0, (0, 255, 0), draw_sweep=False, held=second)
+        assert display.get_at((60, 60))[:3] == (255, 0, 0)
+        assert display.get_at((120, 60))[:3] == (10, 20, 30)
+        rotation.present_radar_sweep(display, new, 2, 0.0, (0, 255, 0), draw_sweep=False, held=second)
+        assert display.get_at((60, 60))[:3] == (40, 50, 60)
+        assert display.get_at((120, 60))[:3] == (255, 0, 0)
