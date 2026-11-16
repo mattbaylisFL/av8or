@@ -342,7 +342,16 @@ Five phases, each a release to look at on the Pi:
   48 ms 37.8/48.8 to 19.4/21.0, over 66 ms 14.6/18.8 to 3.4/2.2, over 100 ms 1.4/1.2 to 0.2/0.2. What is left per
   frame in classic: sweep 3.1 ms, display update 3.6, overlays 1.5. The layer rebuild is unchanged (~270 ms every
   4 s) until phase 4.
-- Phase 3: stepped paint fade for icons, halos and tags; departed targets fade out.
+- Phase 3 DONE 2026-11-16 (release 2026.11.16.14): stepped paint fade (radar_classic.fade_level/fade_brightness,
+  radar._faded with a weak per-sprite cache of dimmed copies): icon, halo and tag dim in 5 steps to 35 percent before
+  the next pass; tracked and selected stay full. Departed targets become ghosts (radar._ghosts, filled by the layer
+  worker when it prunes): their paint decays past the floor and goes after ~7 s, or at once on a view change.
+  FLIGHTSCNR_CLASSIC_FADE=0 turns it off (no portal control). Pi A/B (fade off, on, off, on; 4 min each after
+  2.5 min warm-up; traffic rose 57, 55, 67, 83 targets, so the stutter rates are confounded): 4h_held 0.3/0.5 to
+  1.3/1.8 ms, 4L_live_frame 1.4/1.7 to 2.1/2.6, 4_present 10.3/11.2 to 11.4/12.6, held rects changed per 10 s
+  41/55 to 178/226. Gaps over 66 ms per minute 3.5/6.2 (off) and 5.8/11.2 (on, the last at 83 targets); over 100 ms
+  0.8/0.8 and 0.2/0.5. So the fade costs about 1.5 to 2 ms a frame. Open look question for Matt: tags at the 35
+  percent floor are hard to read in a screenshot; a higher floor for tags only is a small change.
 - Phase 4: trails grow on the pass, slower layer rebuild, rim dots on the beam.
 - Phase 5: final numbers, docs.
 Unrelated, seen 2026-11-16 in a fresh venv: tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart
