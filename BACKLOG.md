@@ -638,3 +638,6 @@ Recommendation, revised:
 Sources: Chromium main `components/omnibox/browser/autocomplete_input.cc`, `net/base/url_util.cc`,
 `chrome/browser/ssl/https_upgrades_interceptor.cc`, `https_upgrades_util.cc`,
 `typed_navigation_upgrade_throttle.cc`, `docs/security/ask-before-http/ask-before-http-adoption-guide.md`.
+
+PARKED 2026-11-16 by Matt: no further work for now. Suspected cause of the missing fallback is a VPN on the
+Windows machine (unverified); the checks above were not run.
