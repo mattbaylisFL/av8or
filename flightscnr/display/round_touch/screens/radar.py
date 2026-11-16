@@ -1874,6 +1874,47 @@ def _split_rim_due(due: list) -> tuple[list, set]:
     return inner, rim
 
 
+def _trail_tip(head, fx: float, fy: float):
+    """Line from a baked trail head to where its target is drawn, or None."""
+    if head is None:
+        return None
+    (bx, by), rgb, width = head
+    if math.hypot(fx - bx, fy - by) < 0.75:
+        return None
+    return (
+        float(bx), float(by), float(fx), float(fy),
+        (*tuple(rgb[:3]), _TRAIL_ALPHA),
+        int(max(1, width)),
+    )
+
+
+def live_held_frame_for(layer_gen) -> list | None:
+    """The held frame as it will look once layer ``layer_gen`` is on screen.
+
+    Same targets, with the trail tips worked out against that layer's trail
+    heads. The present path stamps this onto the next base while the old one
+    is still up, so the swap does not have to redraw every tip.
+    """
+    held = _held_frame
+    heads = _heads_by_gen.get(layer_gen)
+    if held is None or heads is None:
+        return held
+    cache = _live_frame_cache.copy()
+    tips = []
+    rest = []
+    for key, item in held:
+        if key[0] == "c":
+            continue
+        rest.append((key, item))
+        if key[0] == "i":
+            cached = cache.get(key[1])
+            if cached is not None:
+                tip = _trail_tip(heads.get(key[1]), cached[0][0], cached[0][1])
+                if tip is not None:
+                    tips.append((("c", key[1]), tip))
+    return tips + rest
+
+
 def live_held_frame() -> list | None:
     """Held targets published by the latest ``live_icon_frame`` (classic motion)."""
     return _held_frame
@@ -2025,16 +2066,7 @@ def live_icon_frame(now: float | None = None) -> list:
             if tip is not None:
                 held["c"].append((("c", ident), tip))
             continue
-        tip = None
-        head = (held_heads if holds else _live_heads).get(ident)
-        if head is not None:
-            (bx, by), rgb, width = head
-            if math.hypot(fx - bx, fy - by) >= 0.75:
-                tip = (
-                    float(bx), float(by), float(fx), float(fy),
-                    (*tuple(rgb[:3]), _TRAIL_ALPHA),
-                    int(max(1, width)),
-                )
+        tip = _trail_tip((held_heads if holds else _live_heads).get(ident), fx, fy)
         if holds:
             _held_tips[ident] = tip
             if tip is not None:

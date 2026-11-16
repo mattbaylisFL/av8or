@@ -228,6 +228,7 @@ def present_radar_sweep(
     live_connectors: list | None = None,
     live_rim: tuple | None = None,
     held: list | None = None,
+    held_for_gen=None,
 ) -> None:
     """Blit a cached rotated radar base, then optionally draw the sweep.
 
@@ -242,6 +243,8 @@ def present_radar_sweep(
 
     ``held`` is the classic-motion list of ``(key, item)`` targets that keep
     their paint between sweep passes (see radar.live_held_frame), or None.
+    ``held_for_gen(layer_gen)`` returns that list as it will be on a layer
+    not shown yet (see radar.live_held_frame_for).
     """
     global _rot_base, _rot_base_key, _prev_sweep_rect, _pending_key, _needs_full
     global _next_base, _next_base_key, _prev_hud_rect, _prev_bubble_rect
@@ -272,7 +275,7 @@ def present_radar_sweep(
         # its targets on it (see _held_stage_step).
         if frame_debug.ENABLED:
             _t = time.perf_counter()
-        if _held_stage_step(key, base_layer, rotation, held):
+        if _held_stage_step(key, base_layer, rotation, held, held_for_gen):
             swap_in = True
             staged = True
         stale = False
@@ -333,9 +336,10 @@ def present_radar_sweep(
     else:
         if frame_debug.ENABLED:
             _t = time.perf_counter()
-        # A staged swap arrives with its targets stamped; only what changed
-        # since the stage began is left to do.
-        damage = _held_update(held, rotation, rebuild=swap_in and not staged)
+        # A staged swap arrives with its targets stamped, trail tips already
+        # worked out for the new layer. This frame's ``held`` still has the old
+        # layer's tips, so what the beam repainted meanwhile waits one frame.
+        damage = [] if staged else _held_update(held, rotation, rebuild=swap_in)
         if damage is None:
             if not swap_in:
                 _needs_full = True
@@ -671,7 +675,9 @@ def shown_layer_gen():
     return _rot_base_key[0] if _rot_base_key is not None else None
 
 
-def _held_stage_step(key, base_layer: pygame.Surface, rotation: int, held: list) -> bool:
+def _held_stage_step(
+    key, base_layer: pygame.Surface, rotation: int, held: list, held_for_gen=None
+) -> bool:
     """Stamp a few held targets onto the next base. True once it is swapped in.
 
     The swap leaves ``_held_items`` as the set the stage started with, so the
@@ -705,7 +711,10 @@ def _held_stage_step(key, base_layer: pygame.Surface, rotation: int, held: list)
             surf.blit(new, (0, 0))
         stage = _held_stage = {
             "key": key, "base": new, "surf": surf,
-            "snap": list(held), "idx": 0, "table": {},
+            "snap": list(
+                (held_for_gen(key[0]) if held_for_gen is not None else None) or held
+            ),
+            "idx": 0, "table": {},
         }
         _pending_key = None
     started = time.perf_counter()

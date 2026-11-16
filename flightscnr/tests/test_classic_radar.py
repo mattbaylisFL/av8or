@@ -1017,7 +1017,7 @@ class TestStagedBaseSwap:
         assert display.get_at((20, 60))[:3] == (255, 0, 0)
         assert rotation.shown_layer_gen() == 2
 
-    def test_changes_during_the_stage_arrive_with_the_swap(self, fresh_rotation, monkeypatch):
+    def test_changes_during_the_stage_arrive_right_after_the_swap(self, fresh_rotation, monkeypatch):
         rotation, _calls = fresh_rotation
         monkeypatch.setattr(rotation, "_HELD_STAGE_BUDGET_S", 0.0)
         display = pygame.Surface((200, 200))
@@ -1027,8 +1027,10 @@ class TestStagedBaseSwap:
         # The beam repaints everything 10 px along while the stage runs.
         for _frame in range(4):
             self._present(rotation, display, new, 2, self._held(10))
+        assert rotation.shown_layer_gen() == 2
+        # The swap frame shows what the stage began with; the next has the rest.
+        self._present(rotation, display, new, 2, self._held(10))
         staged = pygame.image.tostring(display, "RGB")
-        assert display.get_at((20, 60))[:3] == (40, 50, 60) or display.get_at((30, 60))[:3] == (255, 0, 0)
         # Same end state as stamping everything in one go.
         for name in ("_rot_base", "_rot_base_key", "_held_base", "_held_stage", "_held_spare"):
             monkeypatch.setattr(rotation, name, None)
@@ -1037,6 +1039,31 @@ class TestStagedBaseSwap:
         direct = pygame.Surface((200, 200))
         self._present(rotation, direct, new, 2, self._held(10))
         assert pygame.image.tostring(direct, "RGB") == staged
+
+    def test_stage_stamps_the_next_layers_trail_tips(self, fresh_rotation, monkeypatch):
+        rotation, _calls = fresh_rotation
+        display = pygame.Surface((200, 200))
+        old, new = self._bases()
+        tip_old = (("c", "0"), (20.0, 20.0, 20.0, 60.0, (200, 200, 0, 255), 3))
+        tip_new = (("c", "0"), (20.0, 40.0, 20.0, 60.0, (200, 200, 0, 255), 3))
+        asked = []
+
+        def for_gen(gen):
+            asked.append(gen)
+            return [tip_new] + self._held()
+
+        rotation.present_radar_sweep(
+            display, old, 1, 0.0, (0, 255, 0), draw_sweep=False, held=[tip_old] + self._held()
+        )
+        assert display.get_at((20, 30))[:3] == (200, 200, 0)
+        rotation.present_radar_sweep(
+            display, new, 2, 0.0, (0, 255, 0), draw_sweep=False,
+            held=[tip_old] + self._held(), held_for_gen=for_gen,
+        )
+        assert asked == [2]
+        # The new base came up with the short tip, with no redraw of the old one.
+        assert display.get_at((20, 30))[:3] == (40, 50, 60)
+        assert display.get_at((20, 50))[:3] == (200, 200, 0)
 
     def test_a_newer_layer_restarts_the_stage(self, fresh_rotation, monkeypatch):
         rotation, _calls = fresh_rotation
@@ -1127,3 +1154,42 @@ class TestBeamMatchesWhatIsDrawn:
         scene["frame"](350.0)
         scene["frame"](1.0)
         assert scene["painted"]("south")[0] == scene["cx"] + 7
+
+
+class TestHeldFrameForTheNextLayer:
+    def test_tips_are_worked_out_against_that_layers_heads(self, scene, monkeypatch):
+        cx, cy = scene["cx"], scene["cy"]
+        old_heads = {"south": ((cx, cy + 80.0), (9, 9, 9), 2)}
+        new_heads = {"south": ((cx, cy + 95.0), (9, 9, 9), 2), "east": ((cx + 100.0, cy), (9, 9, 9), 2)}
+        monkeypatch.setattr(radar, "_heads_by_gen", {1: old_heads, 2: new_heads})
+        monkeypatch.setattr(radar, "_live_heads", old_heads)
+        scene["frame"](0.0)
+        now = dict(radar.live_held_frame())
+        ahead = dict(radar.live_held_frame_for(2))
+        assert now[("c", "south")][1] == cy + 80.0
+        assert ahead[("c", "south")][1] == cy + 95.0
+        # east's trail reaches its icon on the new layer: no tip.
+        assert ("c", "east") not in ahead
+        assert {k: v for k, v in ahead.items() if k[0] != "c"} == {
+            k: v for k, v in now.items() if k[0] != "c"
+        }
+
+    def test_matches_what_the_radar_publishes_once_that_layer_is_shown(self, scene, monkeypatch):
+        from display.round_touch import rotation
+
+        cx, cy = scene["cx"], scene["cy"]
+        old_heads = {"south": ((cx, cy + 80.0), (9, 9, 9), 2)}
+        new_heads = {"south": ((cx, cy + 95.0), (9, 9, 9), 2)}
+        monkeypatch.setattr(radar, "_heads_by_gen", {1: old_heads, 2: new_heads})
+        monkeypatch.setattr(radar, "_live_heads", new_heads)
+        monkeypatch.setattr(rotation, "_rot_base_key", (1, 0, 720))
+        scene["frame"](0.0)
+        ahead = radar.live_held_frame_for(2)
+        monkeypatch.setattr(rotation, "_rot_base_key", (2, 0, 720))
+        scene["frame"](5.0)
+        assert dict(radar.live_held_frame()) == dict(ahead)
+
+    def test_unknown_layer_returns_the_current_frame(self, scene, monkeypatch):
+        monkeypatch.setattr(radar, "_heads_by_gen", {})
+        scene["frame"](0.0)
+        assert radar.live_held_frame_for(99) is radar.live_held_frame()

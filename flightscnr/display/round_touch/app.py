@@ -1069,6 +1069,7 @@ class RoundTouchDisplay:
                         live_connectors=live_connectors,
                         live_rim=live_rim,
                         held=held,
+                        held_for_gen=radar.live_held_frame_for,
                     )
                     self._stage("4_present", time.perf_counter() - _t)
                 else:
@@ -1083,6 +1084,7 @@ class RoundTouchDisplay:
                         live_connectors=live_connectors,
                         live_rim=live_rim,
                         held=held,
+                        held_for_gen=radar.live_held_frame_for,
                     )
                 return
 
