@@ -1052,6 +1052,7 @@ class RoundTouchDisplay:
                 live_icons = radar.live_icon_frame()
                 live_connectors = radar.live_trail_connectors()
                 live_rim = radar.live_rim_spec()
+                held = radar.live_held_frame()
                 if FRAME_DEBUG:
                     self._stage("4L_live_frame", time.perf_counter() - _t)
                 sweep_angle = radar.current_sweep_angle()
@@ -1067,6 +1068,7 @@ class RoundTouchDisplay:
                         live_icons=live_icons,
                         live_connectors=live_connectors,
                         live_rim=live_rim,
+                        held=held,
                     )
                     self._stage("4_present", time.perf_counter() - _t)
                 else:
@@ -1080,6 +1082,7 @@ class RoundTouchDisplay:
                         live_icons=live_icons,
                         live_connectors=live_connectors,
                         live_rim=live_rim,
+                        held=held,
                     )
                 return
 

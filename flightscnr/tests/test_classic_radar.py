@@ -227,6 +227,8 @@ def scene(monkeypatch):
     monkeypatch.setattr(radar, "_live_frame_cache", {})
     monkeypatch.setattr(radar, "_live_label_frame_cache", {})
     monkeypatch.setattr(radar, "_beam_latch", radar_classic.BeamLatch())
+    monkeypatch.setattr(radar, "_held_tips", {})
+    monkeypatch.setattr(radar, "_held_frame", None)
     monkeypatch.setattr(radar, "_trail_selected_id", None)
     monkeypatch.setattr(radar, "_trail_projection_key", lambda size: "view")
     monkeypatch.setattr(radar, "current_sweep_angle", lambda: angle["deg"])
@@ -257,7 +259,38 @@ def scene(monkeypatch):
 
 class TestClassicLiveFrame:
     def test_first_frame_paints_every_target(self, scene):
+        assert scene["frame"](0.0) == []
+        assert [key for key, _item in radar.live_held_frame()] == [
+            ("i", "east"), ("i", "south"), ("i", "west"),
+        ]
+
+    def test_gliding_targets_are_drawn_per_frame_and_not_held(self, scene, monkeypatch):
+        monkeypatch.setattr(radar, "_trail_selected_id", "west")
+        assert len(scene["frame"](0.0)) == 1
+        assert ("i", "west") not in dict(radar.live_held_frame())
+
+    def test_held_items_are_identical_between_passes(self, scene):
+        scene["frame"](0.0)
+        first = dict(radar.live_held_frame())
+        scene["frame"](10.0)
+        second = dict(radar.live_held_frame())
+        assert all(second[key] is first[key] for key in first)
+
+    def test_held_trail_tip_waits_for_the_pass(self, scene, monkeypatch):
+        cx, cy = scene["cx"], scene["cy"]
+        monkeypatch.setattr(radar, "_live_heads", {"south": ((cx, cy + 90.0), (9, 9, 9), 2)})
+        scene["frame"](0.0)
+        tip = dict(radar.live_held_frame())[("c", "south")]
+        monkeypatch.setattr(radar, "_live_heads", {"south": ((cx, cy + 95.0), (9, 9, 9), 2)})
+        scene["frame"](10.0)
+        assert dict(radar.live_held_frame())[("c", "south")] is tip
+        scene["frame"](181.0)
+        assert dict(radar.live_held_frame())[("c", "south")][1] == cy + 95.0
+
+    def test_other_motions_publish_no_held_frame(self, scene, monkeypatch):
+        monkeypatch.setattr(settings, "classic_radar_enabled", lambda: False)
         assert len(scene["frame"](0.0)) == 3
+        assert radar.live_held_frame() is None
 
     def test_target_holds_until_the_beam_reaches_it(self, scene):
         scene["frame"](0.0)
@@ -374,3 +407,215 @@ class TestPortalControl:
         for mode in settings.RADAR_MOTIONS:
             assert f'<option value="{mode}"' in page
         assert 'id="smooth_motion"' not in page
+
+
+@pytest.fixture
+def held_base(monkeypatch):
+    from display.round_touch import rotation
+
+    base = pygame.Surface((200, 200))
+    base.fill((10, 20, 30))
+    monkeypatch.setattr(rotation, "_rot_base", base)
+    monkeypatch.setattr(rotation, "_held_base", None)
+    monkeypatch.setattr(rotation, "_held_items", {})
+    monkeypatch.setattr(rotation.theme, "SIZE", 200)
+    return rotation
+
+
+def _dot(color, size=10):
+    sprite = pygame.Surface((size, size), pygame.SRCALPHA)
+    sprite.fill(color)
+    return sprite
+
+
+class TestHeldBase:
+    def test_first_use_stamps_everything(self, held_base):
+        red = _dot((255, 0, 0, 255))
+        assert held_base._held_update([(("i", "a"), (red, 50, 50))], 0, rebuild=False) is None
+        assert held_base._held_base.get_at((50, 50))[:3] == (255, 0, 0)
+        assert held_base._held_base.get_at((150, 150))[:3] == (10, 20, 30)
+
+    def test_unchanged_frame_reports_no_damage(self, held_base):
+        held = [(("i", "a"), (_dot((255, 0, 0, 255)), 50, 50))]
+        held_base._held_update(held, 0, rebuild=False)
+        assert held_base._held_update(list(held), 0, rebuild=False) == []
+
+    def test_equal_items_in_new_tuples_are_unchanged(self, held_base):
+        red = _dot((255, 0, 0, 255))
+        held_base._held_update([(("l", "a"), (red, 50, 50))], 0, rebuild=False)
+        assert held_base._held_update([(("l", "a"), (red, 50, 50))], 0, rebuild=False) == []
+
+    def test_moved_target_restores_the_old_spot(self, held_base):
+        red = _dot((255, 0, 0, 255))
+        held_base._held_update([(("i", "a"), (red, 50, 50))], 0, rebuild=False)
+        damage = held_base._held_update([(("i", "a"), (red, 120, 50))], 0, rebuild=False)
+        assert len(damage) == 2
+        assert held_base._held_base.get_at((50, 50))[:3] == (10, 20, 30)
+        assert held_base._held_base.get_at((120, 50))[:3] == (255, 0, 0)
+
+    def test_departed_target_is_erased(self, held_base):
+        red = _dot((255, 0, 0, 255))
+        held_base._held_update([(("i", "a"), (red, 50, 50))], 0, rebuild=False)
+        damage = held_base._held_update([], 0, rebuild=False)
+        assert len(damage) == 1
+        assert held_base._held_base.get_at((50, 50))[:3] == (10, 20, 30)
+
+    def test_neighbour_under_the_damage_is_restamped(self, held_base):
+        red = _dot((255, 0, 0, 255))
+        blue = _dot((0, 0, 255, 255))
+        held = [(("i", "a"), (red, 50, 50)), (("i", "b"), (blue, 56, 50))]
+        held_base._held_update(held, 0, rebuild=False)
+        held_base._held_update([held[0]], 0, rebuild=False)
+        # b is gone; the part of a it covered shows again.
+        assert held_base._held_base.get_at((53, 50))[:3] == (255, 0, 0)
+        assert held_base._held_base.get_at((60, 50))[:3] == (10, 20, 30)
+
+    def test_translucent_overlap_matches_a_full_restamp(self, held_base):
+        glow = _dot((0, 255, 0, 90), 30)
+        red = _dot((255, 0, 0, 120), 16)
+        start = [
+            (("g", "a"), (glow, 60, 60)), (("g", "b"), (glow, 75, 60)),
+            (("i", "a"), (red, 60, 60)), (("i", "b"), (red, 75, 60)),
+        ]
+        moved = [
+            (("g", "a"), (glow, 60, 60)), (("g", "b"), (glow, 70, 64)),
+            (("i", "a"), (red, 60, 60)), (("i", "b"), (red, 70, 64)),
+        ]
+        held_base._held_update(start, 0, rebuild=False)
+        assert held_base._held_update(moved, 0, rebuild=False)
+        incremental = pygame.image.tostring(held_base._held_base, "RGB")
+        held_base._held_update(moved, 0, rebuild=True)
+        assert pygame.image.tostring(held_base._held_base, "RGB") == incremental
+
+    def test_trail_tip_change_matches_a_full_restamp(self, held_base):
+        red = _dot((255, 0, 0, 255))
+        start = [(("c", "a"), (20.0, 20.0, 50.0, 50.0, (200, 200, 0, 125), 2)), (("i", "a"), (red, 50, 50))]
+        moved = [(("c", "a"), (20.0, 20.0, 80.0, 40.0, (200, 200, 0, 125), 2)), (("i", "a"), (red, 80, 40))]
+        held_base._held_update(start, 0, rebuild=False)
+        assert held_base._held_update(moved, 0, rebuild=False)
+        incremental = pygame.image.tostring(held_base._held_base, "RGB")
+        held_base._held_update(moved, 0, rebuild=True)
+        assert pygame.image.tostring(held_base._held_base, "RGB") == incremental
+
+    def test_rotated_display_matches_a_full_restamp(self, held_base):
+        red = _dot((255, 0, 0, 200), 12)
+        start = [(("i", "a"), (red, 40, 90)), (("i", "b"), (red, 46, 94))]
+        moved = [(("i", "a"), (red, 44, 92)), (("i", "b"), (red, 46, 94))]
+        held_base._held_update(start, 90, rebuild=False)
+        assert held_base._held_update(moved, 90, rebuild=False)
+        incremental = pygame.image.tostring(held_base._held_base, "RGB")
+        held_base._held_update(moved, 90, rebuild=True)
+        assert pygame.image.tostring(held_base._held_base, "RGB") == incremental
+
+    def test_a_burst_of_changes_falls_back_to_a_full_restamp(self, held_base):
+        red = _dot((255, 0, 0, 255), 4)
+        start = [(("i", str(n)), (red, 10 + n * 4, 20)) for n in range(30)]
+        moved = [(("i", str(n)), (red, 10 + n * 4, 120)) for n in range(30)]
+        held_base._held_update(start, 0, rebuild=False)
+        assert held_base._held_update(moved, 0, rebuild=False) is None
+        assert held_base._held_base.get_at((10, 20))[:3] == (10, 20, 30)
+        assert held_base._held_base.get_at((10, 120))[:3] == (255, 0, 0)
+
+
+@pytest.fixture
+def fresh_rotation(monkeypatch):
+    from display.round_touch import rotation
+
+    for name, value in (
+        ("_rot_base", None), ("_rot_base_key", None), ("_prev_sweep_rect", None),
+        ("_pending_key", None), ("_next_base", None), ("_next_base_key", None),
+        ("_needs_full", False), ("_prev_icon_rects", []), ("_upload_y", None),
+        ("_rim_prev_spec", None), ("_rim_prev_rects", []),
+        ("_held_base", None), ("_held_items", {}),
+    ):
+        monkeypatch.setattr(rotation, name, value)
+    for name in (
+        "_blit_hud_overlay", "_blit_update_bubble", "_blit_airport_callout",
+        "_blit_location_toast", "_blit_lofi_controls", "_blit_lofi_tile",
+        "_blit_airport_tile", "_blit_favourite_tile", "_blit_radial_menu",
+    ):
+        monkeypatch.setattr(rotation, name, lambda *a, **k: None)
+    monkeypatch.setattr(rotation, "rotation_degrees", lambda: 0)
+    monkeypatch.setattr(rotation, "_shift", (0, 0))
+    monkeypatch.setattr(rotation.theme, "SIZE", 200)
+    monkeypatch.setattr(rotation.theme, "SWEEP_RADIUS", 95)
+    calls = []
+    monkeypatch.setattr(pygame.display, "update", lambda rects: calls.append(("update", list(rects))))
+    monkeypatch.setattr(pygame.display, "flip", lambda: calls.append(("flip", None)))
+    return rotation, calls
+
+
+class TestPresentWithHeldTargets:
+    """Classic motion must put the same pixels on the display as drawing
+    every target each frame."""
+
+    def _frames(self):
+        red = _dot((255, 0, 0, 255))
+        glow = _dot((0, 255, 0, 90), 30)
+        blue = _dot((0, 0, 255, 160), 14)
+        tip = (30.0, 30.0, 60.0, 60.0, (200, 200, 0, 125), 2)
+        tip2 = (30.0, 30.0, 66.0, 58.0, (200, 200, 0, 125), 2)
+        first = {"c": [(("c", "a"), tip)], "g": [(("g", "a"), (glow, 60, 60))],
+                 "i": [(("i", "a"), (red, 60, 60)), (("i", "b"), (blue, 68, 62))]}
+        second = {"c": [(("c", "a"), tip2)], "g": [(("g", "a"), (glow, 66, 58))],
+                  "i": [(("i", "a"), (red, 66, 58)), (("i", "b"), (blue, 68, 62))]}
+        third = {"c": [], "g": [], "i": [(("i", "b"), (blue, 68, 62))]}
+        return [first, second, second, third]
+
+    def _run(self, rotation, classic: bool, sweep: bool):
+        display = pygame.Surface((200, 200))
+        base = pygame.Surface((200, 200))
+        base.fill((10, 20, 30))
+        shots = []
+        for step, frame in enumerate(self._frames()):
+            order = frame["c"] + frame["g"] + frame["i"]
+            kwargs = (
+                {"held": order}
+                if classic
+                else {
+                    "live_connectors": [item for _key, item in frame["c"]],
+                    "live_icons": [item for _key, item in frame["g"] + frame["i"]],
+                }
+            )
+            rotation.present_radar_sweep(
+                display, base, 1, 40.0 + step * 15.0, (48, 255, 96), draw_sweep=sweep, **kwargs
+            )
+            shots.append(pygame.image.tostring(display, "RGB"))
+        return shots
+
+    @pytest.mark.parametrize("sweep", [False, True])
+    def test_matches_per_frame_drawing(self, fresh_rotation, monkeypatch, sweep):
+        rotation, _calls = fresh_rotation
+        classic = self._run(rotation, True, sweep)
+        for name, value in (
+            ("_rot_base", None), ("_rot_base_key", None), ("_prev_sweep_rect", None),
+            ("_prev_icon_rects", []), ("_held_base", None), ("_held_items", {}),
+            ("_needs_full", False),
+        ):
+            monkeypatch.setattr(rotation, name, value)
+        smooth = self._run(rotation, False, sweep)
+        assert classic == smooth
+
+    def test_quiet_frame_pushes_no_target_rects(self, fresh_rotation):
+        rotation, calls = fresh_rotation
+        self._run(rotation, True, False)
+        # Frame 3 repeats frame 2: nothing held changed, nothing to push.
+        assert calls[2] == ("flip", None) or calls[2] == ("update", [])
+
+    def test_changed_target_rects_are_pushed(self, fresh_rotation):
+        rotation, calls = fresh_rotation
+        self._run(rotation, True, False)
+        kind, rects = calls[1]
+        assert kind == "update" and rects
+
+    def test_leaving_classic_repaints_the_display(self, fresh_rotation):
+        rotation, calls = fresh_rotation
+        self._run(rotation, True, False)
+        display = pygame.Surface((200, 200))
+        base = pygame.Surface((200, 200))
+        base.fill((10, 20, 30))
+        calls.clear()
+        rotation.present_radar_sweep(display, base, 1, 10.0, (48, 255, 96), draw_sweep=False)
+        assert calls == [("flip", None)]
+        assert rotation._held_base is None
+        assert display.get_at((68, 62))[:3] == (10, 20, 30)

@@ -1437,6 +1437,15 @@ _live_frame_cursor = 0
 _live_ids: set = set()
 # Classic motion: which targets the sweep has reached (see radar_classic).
 _beam_latch = radar_classic.BeamLatch()
+# Classic motion: ``[(key, item), ...]`` for the targets holding their paint
+# this frame, in draw order (trail tips, halos, icons, tags). The present
+# path stamps these once and only touches the ones that change. None in the
+# other motions, where every target is drawn each frame.
+_held_frame: list | None = None
+# Trail tip of each held target as drawn at its last pass. The layer worker
+# moves the baked trail heads every few seconds; following them would redraw
+# every held tip between passes.
+_held_tips: dict = {}
 # 4 ms: on a Pi 4 a refresh costs ~0.6 ms per target, so ~6 targets a frame and
 # each one every ~6 frames with 40 on screen. They move well under a pixel per
 # frame; at 6 ms the pass alone pushed busy frames past the 33 ms budget.
@@ -1663,12 +1672,23 @@ def _classic_due_ids(icons) -> list:
     return _beam_latch.due(current_sweep_angle(), view, bearings, live)
 
 
+def live_held_frame() -> list | None:
+    """Held targets published by the latest ``live_icon_frame`` (classic motion)."""
+    return _held_frame
+
+
 def live_icon_frame(now: float | None = None) -> list:
-    """Per-frame ``[(sprite, x, y), ...]`` for icons then tags (logical coords)."""
-    global _phase_left, _live_connectors, _live_frame_cursor
+    """Per-frame ``[(sprite, x, y), ...]`` for icons then tags (logical coords).
+
+    In classic motion this is only the tracked and selected aircraft; the
+    rest are in ``live_held_frame``.
+    """
+    global _phase_left, _live_connectors, _live_frame_cursor, _held_frame
     _live_connectors = []
     icons = _live_icons
     if not icons:
+        _held_frame = [] if settings.classic_radar_enabled() else None
+        _held_tips.clear()
         _label_hits.clear()
         _live_frame_cache.clear()
         _live_label_frame_cache.clear()
@@ -1763,17 +1783,41 @@ def live_icon_frame(now: float | None = None) -> list:
         for ident, cached in frame_cache_snapshot.items()
         if ident in by_id
     }
+    # Classic motion: everything but the tracked and selected aircraft holds.
+    held = None
+    moving: set = set()
+    if classic:
+        held = {"c": [], "g": [], "i": [], "l": []}
+        moving = {
+            st["id"] for st in icons
+            if st.get("live") or st["id"] == _trail_selected_id
+        }
+    painted_now = set(processed_ids)
+    for ident in [key for key in _held_tips if key not in live_pos or key in moving]:
+        _held_tips.pop(ident, None)
     for ident, (fx, fy) in live_pos.items():
-        head = _live_heads.get(ident)
-        if head is None:
+        holds = held is not None and ident not in moving
+        if holds and ident not in painted_now and ident in _held_tips:
+            tip = _held_tips[ident]
+            if tip is not None:
+                held["c"].append((("c", ident), tip))
             continue
-        (bx, by), rgb, width = head
-        if math.hypot(fx - bx, fy - by) >= 0.75:
-            _live_connectors.append((
-                float(bx), float(by), float(fx), float(fy),
-                (*tuple(rgb[:3]), _TRAIL_ALPHA),
-                int(max(1, width)),
-            ))
+        tip = None
+        head = _live_heads.get(ident)
+        if head is not None:
+            (bx, by), rgb, width = head
+            if math.hypot(fx - bx, fy - by) >= 0.75:
+                tip = (
+                    float(bx), float(by), float(fx), float(fy),
+                    (*tuple(rgb[:3]), _TRAIL_ALPHA),
+                    int(max(1, width)),
+                )
+        if holds:
+            _held_tips[ident] = tip
+            if tip is not None:
+                held["c"].append((("c", ident), tip))
+        elif tip is not None:
+            _live_connectors.append(tip)
 
     label_by_id = {lb["id"]: lb for lb in _live_labels}
     for ident in processed_ids:
@@ -1814,6 +1858,11 @@ def live_icon_frame(now: float | None = None) -> list:
         cached = _live_frame_cache.get(st["id"])
         if cached is None:
             continue
+        if held is not None and st["id"] not in moving:
+            if cached[2] is not None:
+                held["g"].append((("g", st["id"]), cached[2]))
+            held["i"].append((("i", st["id"]), cached[1]))
+            continue
         if cached[2] is not None:
             glows.append(cached[2])
         out.append(cached[1])
@@ -1826,12 +1875,18 @@ def live_icon_frame(now: float | None = None) -> list:
         if cached is None:
             continue
         _vis_id, sprite, ix, iy = cached
-        out.append((sprite, ix, iy))
+        if held is not None and lb["id"] not in moving:
+            held["l"].append((("l", lb["id"]), (sprite, ix, iy)))
+        else:
+            out.append((sprite, ix, iy))
         _label_hits.append((
             lb["id"],
             pygame.Rect(ix - sprite.get_width() // 2, iy - sprite.get_height() // 2,
                         sprite.get_width(), sprite.get_height()),
         ))
+    _held_frame = (
+        None if held is None else held["c"] + held["g"] + held["i"] + held["l"]
+    )
     return out
 
 
@@ -1841,6 +1896,13 @@ def draw_live_icons(surface) -> None:
 
     frame = live_icon_frame()
     # Logical surface — present() rotates the whole frame afterwards.
+    # Classic motion: held targets first, the gliding ones on top.
+    held = _held_frame or ()
+    rotation._blit_live_connectors(
+        surface, (0, 0), 0, [item for key, item in held if key[0] == "c"]
+    )
+    for key, (sprite, x, y) in ((k, it) for k, it in held if k[0] != "c"):
+        surface.blit(sprite, (int(x) - sprite.get_width() // 2, int(y) - sprite.get_height() // 2))
     rotation._blit_live_connectors(surface, (0, 0), 0, _live_connectors)
     for sprite, x, y in frame:
         surface.blit(sprite, (int(x) - sprite.get_width() // 2, int(y) - sprite.get_height() // 2))
