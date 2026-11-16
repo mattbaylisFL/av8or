@@ -392,6 +392,9 @@ Five phases, each a release to look at on the Pi:
   motion section to update. ACCEPTED by Matt 2026-11-16 at the measured level (about 40 percent fewer frames over
   66 ms than smooth). The STILL OPEN item above (8 to 22 ms held updates in slow frames) stays as CPU-side follow-up.
 
+UPSTREAM 2026-11-16: classic radar staged as fork branch feat/classic-radar (one commit, 557cc01, on upstream main
+3544836; 16 files; upstream suite 2559 passing). Matt opens the PR.
+
 ## Next: GPU-driven radar renderer behind a portal setting (requested by Matt 2026-11-16)
 
 After classic radar ships, look into a parallel GPU-driven version of the radar display, selectable in the portal
