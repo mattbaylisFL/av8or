@@ -331,7 +331,17 @@ Five phases, each a release to look at on the Pi:
   the baked trail runs up to a rotation ahead of a held icon (phase 4), departed targets vanish at the next layer
   publish (phase 3), heli rotors freeze between passes, rim targets still update on the layer cadence (phase 4),
   and Fly smoothly in/out applies to all traffic at each pass, not only tracked and selected aircraft.
-- Phase 2: cached targets picture in the present path (the performance change); interleaved A/B against smooth.
+- Phase 2 DONE 2026-11-16 (release 2026.11.16.12): held targets are stamped once onto a copy of the rotated base
+  (rotation._held_update, radar.live_held_frame); per frame the display only restores from that copy and draws the
+  beam, HUD and the tracked and selected aircraft. Changed rects are restored from the bare base and every
+  overlapping held item restamped clipped to the rect, one rect at a time, so it is pixel-identical to per-frame
+  drawing (tested, also rotated); over 40 changed rects in a frame falls back to a full restamp. Held trail tips
+  wait for the pass. Interleaved A/B on the Pi (smooth, classic, smooth, classic, 5 min each, mode switched through
+  the settings file with no restarts, 55 to 58 targets): 4_present 20.8/22.0 to 10.3/9.9 ms, 4L_live_frame 6.7/6.9
+  to 1.6/1.3, 4p_erase 3.2/3.5 to 0.7/0.8, 4p_live 5.7/6.3 to 0, 4h_held 0.5/0.3. Hitch log per minute: gaps over
+  48 ms 37.8/48.8 to 19.4/21.0, over 66 ms 14.6/18.8 to 3.4/2.2, over 100 ms 1.4/1.2 to 0.2/0.2. What is left per
+  frame in classic: sweep 3.1 ms, display update 3.6, overlays 1.5. The layer rebuild is unchanged (~270 ms every
+  4 s) until phase 4.
 - Phase 3: stepped paint fade for icons, halos and tags; departed targets fade out.
 - Phase 4: trails grow on the pass, slower layer rebuild, rim dots on the beam.
 - Phase 5: final numbers, docs.
