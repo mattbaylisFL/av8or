@@ -932,13 +932,15 @@ class TestTrailsEndAtThePaintedPosition:
 
 
 class TestClassicLayerCadence:
-    def test_one_rebuild_per_rotation(self, monkeypatch):
+    def test_classic_keeps_the_smooth_cadence(self, monkeypatch):
+        # One rebuild per rotation (6 s) was measured on the Pi: no fewer slow
+        # frames than 4 s, and new traffic showed up to 2 s later.
         monkeypatch.delenv("FLIGHTSCNR_LAYER_TTL", raising=False)
         monkeypatch.setattr(radar, "live_icons_enabled", lambda: True)
         monkeypatch.setattr(settings, "classic_radar_enabled", lambda: True)
-        monkeypatch.setattr(theme, "SWEEP_PERIOD_MS", 6000)
+        monkeypatch.setattr(settings, "flight_trails_mode", lambda: "all")
         monkeypatch.setattr(radar, "_layer_build_cost_s", 0.0)
-        assert radar._layer_ttl_s() == pytest.approx(6.0)
+        assert radar._layer_ttl_s() == pytest.approx(4.0)
 
     def test_smooth_keeps_its_cadence(self, monkeypatch):
         monkeypatch.delenv("FLIGHTSCNR_LAYER_TTL", raising=False)

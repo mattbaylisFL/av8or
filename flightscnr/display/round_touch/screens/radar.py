@@ -84,11 +84,6 @@ def _configured_layer_ttl() -> float:
             pass
     if not live_icons_enabled():
         return 0.2
-    if settings.classic_radar_enabled():
-        # Nothing on the layer moves between passes: targets, tags and trail
-        # tips are painted by the beam. One rebuild a rotation picks up new
-        # traffic and bakes the trail behind each painted position.
-        return theme.SWEEP_PERIOD_MS / 1000.0
     # Icons, tags, and halos already move every frame. Rebuilding this base
     # just to rotate it is what makes the sweep hitch. Trails are the baked
     # piece that still ages; a live line covers the gap until the next bake.
@@ -117,8 +112,6 @@ _LIVE_LAYER_TTL_MAX_S = 4.0
 def _layer_ttl_s() -> float:
     ttl = max(_configured_layer_ttl(), _layer_build_cost_s * 3.0)
     cap = _LIVE_LAYER_TTL_MAX_S if live_icons_enabled() else _FRAME_LAYER_TTL_MAX_S
-    if settings.classic_radar_enabled():
-        cap = max(cap, theme.SWEEP_PERIOD_MS / 1000.0)
     ttl = min(ttl, cap)
     # Rim pulse is ~2Hz; keep the baked stroke in sync without leaving the
     # fast dirty-rect present path. Live icons already move every frame, and

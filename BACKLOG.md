@@ -352,7 +352,18 @@ Five phases, each a release to look at on the Pi:
   41/55 to 178/226. Gaps over 66 ms per minute 3.5/6.2 (off) and 5.8/11.2 (on, the last at 83 targets); over 100 ms
   0.8/0.8 and 0.2/0.5. So the fade costs about 1.5 to 2 ms a frame. Open look question for Matt: tags at the 35
   percent floor are hard to read in a screenshot; a higher floor for tags only is a small change.
-- Phase 4: trails grow on the pass, slower layer rebuild, rim dots on the beam.
+- Phase 4 DONE 2026-11-16 (releases 2026.11.16.16 and the next): trails end at the painted position
+  (_draw_trails takes the head from _live_frame_cache; unpainted targets get no trail) and a new layer recomputes the
+  held tips against its heads, with the present path holding that burst back one frame so it lands with the new
+  base. Rim targets are beam-latched sprites (_rim_spec on the worker, _classic_rim_items on the display), fading
+  like the rest; a target entering range keeps its rim paint until its icon is painted. After a view change the
+  layer is expired again 0.6 s later so trails return. TRIED AND DROPPED: one layer rebuild per rotation (6 s
+  instead of 4). Pi A/B in classic (4, 6, 4, 6 s; 4 min each; 64 to 74 targets): rebuilds 14 to 10 per minute but
+  gaps over 66 ms 11.0/12.8 (4 s) against 12.0/11.8 (6 s), over 100 ms 1.2/1.5 against 1.0/1.5. No gain, and new
+  traffic appeared up to 2 s later, so classic keeps the 4 s cadence. Per frame now: 4_present ~13.2 ms,
+  4h_held ~2.1, 4L_live_frame ~3.0, ~110 held items, ~33 changed rects a second. The 66 ms rate here (11 to 13 per
+  minute at ~70 targets) is above the phase 2 figure (2 to 3 at ~57 targets, before fade and rim sprites); traffic
+  differs, so phase 5 needs a same-hour smooth against classic comparison.
 - Phase 5: final numbers, docs.
 Unrelated, seen 2026-11-16 in a fresh venv: tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart
 fails on its own on main (a pixel outside the chart differs); not from this work.
