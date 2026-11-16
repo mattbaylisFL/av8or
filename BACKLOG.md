@@ -318,6 +318,25 @@ Design notes:
 - Touch hit-testing must use the latched positions, not the live ones.
 - Setting in settings.py plus the portal (web/app.py, templates) with catalogue strings in all six locales.
 - Measure with FRAME_DEBUG and the hitch log against the smooth-mode baseline in the stutter entry.
+DECIDED (Matt, 2026-11-16): (1) one three-way "Aircraft motion" choice (Standard, Smooth, Classic radar) replaces
+the Smooth motion switch; saved devices map off to Standard and on to Smooth. (2) Tags fade with the icons (full
+authentic fade, not text held at full brightness). (3) Alert aircraft follow the beam like other traffic; rim flash
+and sound unchanged, halo painted bright at each pass.
+Five phases, each a release to look at on the Pi:
+- Phase 1 DONE 2026-11-16: setting (settings.radar_motion, key radar_motion, smooth_motion kept in step for older
+  code; device picker row; portal select; six locales) and the beam latch (display/round_touch/radar_classic.py,
+  BeamLatch). live_icon_frame repaints only targets the beam crossed (bearing of the painted position), everything
+  on a view change, and the tracked and selected aircraft every frame; tags hold with their icon; taps use painted
+  positions (radar._tap_xy). Same present path as smooth, so no speed gain yet. Known gaps left for later phases:
+  the baked trail runs up to a rotation ahead of a held icon (phase 4), departed targets vanish at the next layer
+  publish (phase 3), heli rotors freeze between passes, rim targets still update on the layer cadence (phase 4),
+  and Fly smoothly in/out applies to all traffic at each pass, not only tracked and selected aircraft.
+- Phase 2: cached targets picture in the present path (the performance change); interleaved A/B against smooth.
+- Phase 3: stepped paint fade for icons, halos and tags; departed targets fade out.
+- Phase 4: trails grow on the pass, slower layer rebuild, rim dots on the beam.
+- Phase 5: final numbers, docs.
+Unrelated, seen 2026-11-16 in a fresh venv: tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart
+fails on its own on main (a pixel outside the chart differs); not from this work.
 
 ## Log noise (noticed 2026-11-04)
 

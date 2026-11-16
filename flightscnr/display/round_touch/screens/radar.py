@@ -32,6 +32,7 @@ from display.round_touch import (
 )
 from display.round_touch import airspace_overlay, cyclone_overlay
 from display.round_touch import alert_prefs, frame_debug
+from display.round_touch import radar_classic
 from display.round_touch import vessel_declutter
 from i18n import tr
 from utilities import aircraft_alert
@@ -125,6 +126,7 @@ def _init_sweep():
     _sweep_last_ms = time.time() * 1000
     _backdrop = None
     _backdrop_key = None
+    _beam_latch.reset()
     invalidate_frame_layer()
 
 
@@ -1430,6 +1432,11 @@ _label_state: dict = {}
 _live_frame_cache: dict[str, tuple] = {}
 _live_label_frame_cache: dict[str, tuple] = {}
 _live_frame_cursor = 0
+# Ids in the published live set, so a tap can tell "not painted yet" (classic
+# motion, waiting for its first pass) from "never a live icon".
+_live_ids: set = set()
+# Classic motion: which targets the sweep has reached (see radar_classic).
+_beam_latch = radar_classic.BeamLatch()
 # 4 ms: on a Pi 4 a refresh costs ~0.6 ms per target, so ~6 targets a frame and
 # each one every ~6 frames with 40 on screen. They move well under a pixel per
 # frame; at 6 ms the pass alone pushed busy frames past the 33 ms budget.
@@ -1445,10 +1452,11 @@ def _set_pending_live_specs(icons, labels) -> None:
 
 
 def _publish_live_specs() -> None:
-    global _live_icons, _live_labels, _live_heads, _live_frame_cursor
+    global _live_icons, _live_labels, _live_heads, _live_frame_cursor, _live_ids
     if _live_pending is not None:
         _live_icons, _live_labels, _live_heads = _live_pending
         keep = {st["id"] for st in _live_icons}
+        _live_ids = keep
         for cache in (_live_frame_cache, _live_label_frame_cache):
             # The display thread can update/clear these while the layer worker
             # publishes. A shallow copy is atomic under the GIL and gives this
@@ -1618,11 +1626,13 @@ def _clip_to_display(sprite, ix, iy):
     return clipped, ix, iy
 
 
-def _live_glow_sprite(flight, icon_color):
+def _live_glow_sprite(flight, icon_color, pulse_on: bool | None = None):
     """Halo disc that rides with a live icon, or None."""
     if not _blip_wants_glow(flight):
         return None
-    style = _halo_style(flight, icon_color, aircraft_alert.pulse_phase())
+    if pulse_on is None:
+        pulse_on = aircraft_alert.pulse_phase()
+    style = _halo_style(flight, icon_color, pulse_on)
     if style is None:
         return None
     color, alpha, blooming = style
@@ -1633,6 +1643,24 @@ def _live_glow_sprite(flight, icon_color):
 def live_trail_connectors() -> list:
     """Trail tips published by the latest ``live_icon_frame`` (logical pixels)."""
     return _live_connectors
+
+
+def _classic_due_ids(icons) -> list:
+    """Targets to repaint this frame in classic motion, live ones first."""
+    cx, cy = float(theme.CENTER_X), float(theme.CENTER_Y)
+    bearings = {}
+    live = []
+    for st in icons:
+        ident = st["id"]
+        cached = _live_frame_cache.get(ident)
+        # The painted position is what the beam visibly reaches. A target
+        # with no paint yet waits at its data position for its first pass.
+        x, y = cached[0] if cached is not None else st["xy"]
+        bearings[ident] = radar_classic.bearing_deg(x, y, cx, cy)
+        if st.get("live") or ident == _trail_selected_id:
+            live.append(ident)
+    view = _trail_projection_key((theme.SIZE, theme.SIZE))
+    return _beam_latch.due(current_sweep_angle(), view, bearings, live)
 
 
 def live_icon_frame(now: float | None = None) -> list:
@@ -1655,16 +1683,23 @@ def live_icon_frame(now: float | None = None) -> list:
     by_id = {st["id"]: st for st in icons}
     index_by_id = {st["id"]: idx for idx, st in enumerate(icons)}
 
-    # New targets are prepared first. Existing targets advance in a round-robin
-    # bounded by wall time, spreading dense-scene work over frames.
-    update_ids = [st["id"] for st in icons if st["id"] not in _live_frame_cache]
-    seen = set(update_ids)
-    for offset in range(count):
-        st = icons[(_live_frame_cursor + offset) % count]
-        ident = st["id"]
-        if ident not in seen:
-            update_ids.append(ident)
-            seen.add(ident)
+    classic = settings.classic_radar_enabled()
+    if classic:
+        # Only what the sweep reached this frame, plus tracked and selected
+        # aircraft. Everything else keeps the sprite it was painted with.
+        update_ids = _classic_due_ids(icons)
+    else:
+        # New targets are prepared first. Existing targets advance in a
+        # round-robin bounded by wall time, spreading dense-scene work over
+        # frames.
+        update_ids = [st["id"] for st in icons if st["id"] not in _live_frame_cache]
+        seen = set(update_ids)
+        for offset in range(count):
+            st = icons[(_live_frame_cursor + offset) % count]
+            ident = st["id"]
+            if ident not in seen:
+                update_ids.append(ident)
+                seen.add(ident)
 
     processed_ids = []
     # One set of projection constants for the whole pass: each target is
@@ -1691,7 +1726,12 @@ def live_icon_frame(now: float | None = None) -> list:
                 if hs is not None:
                     heading = hs
             st["color"] = _flight_icon_color(st["flight"], compact=False)
-            glow = _live_glow_sprite(st["flight"], st.get("color"))
+            # A classic repaint holds until the next pass, so paint the halo
+            # at its bright phase; a dim one would sit there a whole rotation.
+            glow = _live_glow_sprite(
+                st["flight"], st.get("color"),
+                True if classic and not (st.get("live") or ident == _trail_selected_id) else None,
+            )
             glow_item = (
                 _clip_to_display(glow, int(round(fx)), int(round(fy)))
                 if glow is not None
@@ -1711,6 +1751,8 @@ def live_icon_frame(now: float | None = None) -> list:
             _live_frame_cursor = (index_by_id[ident] + 1) % count
     finally:
         map_bg.end_projection_batch()
+    if classic:
+        _beam_latch.painted(processed_ids)
 
     # The layer-prewarm worker prunes this cache when it publishes a new target
     # set. Iterating the shared dict directly can raise "dictionary changed
@@ -1751,7 +1793,8 @@ def live_icon_frame(now: float | None = None) -> list:
 
     # A layer publish may replace a label sprite between that target's turns.
     # Refresh only those changed labels immediately; unchanged ones stay cheap.
-    for ident, lb in label_by_id.items():
+    # Classic motion holds a tag, like its icon, until the sweep comes round.
+    for ident, lb in (() if classic else label_by_id.items()):
         cached = _live_label_frame_cache.get(ident)
         vis = lb.get("vis")
         base = live_pos.get(ident)
@@ -2208,6 +2251,7 @@ def _draw_flights(surface, flights, live=None, live_labels=None):
     highlighted_any = False
     heli_any = False
     heli_icon_form = settings.target_form("heli") == "icon"
+    classic_live = live is not None and settings.classic_radar_enabled()
     map_bg.begin_projection_batch()
     try:
         rim_items: list[tuple[float, dict, tuple[int, int]]] = []
@@ -2320,6 +2364,8 @@ def _draw_flights(surface, flights, live=None, live_labels=None):
                     st["color"] = color
                     st["xy"] = (x, y)
                     st["heli"] = bool(is_heli)
+                    # Classic motion keeps the tracked aircraft gliding.
+                    st["live"] = classic_live and _is_tracked(flight)
                     live.append(st)
                     continue
             glow = _paint_blip_glow(
@@ -2711,6 +2757,26 @@ def _flight_screen_xy(flight) -> tuple[int, int] | None:
     return geo.beyond_ring_position(lat, lon)
 
 
+def _tap_xy(flight) -> tuple[int, int] | None:
+    """Where a tap finds this target: where it is painted.
+
+    Classic motion leaves a target at its last pass for up to a rotation, so
+    the data position can sit several pixels off the glyph. A target still
+    waiting for its first pass is not on screen and cannot be tapped.
+    """
+    if settings.classic_radar_enabled():
+        from display.round_touch import position_smooth
+
+        ident = position_smooth.identity_of(flight)
+        if ident:
+            cached = _live_frame_cache.get(ident)
+            if cached is not None:
+                return int(round(cached[0][0])), int(round(cached[0][1]))
+            if ident in _live_ids:
+                return None
+    return _flight_screen_xy(flight)
+
+
 def pick_flight_at(flights, tap_x, tap_y, alt_x=None, alt_y=None):
     """Hit-test aircraft/vessel *icons* only — labels are not tappable.
 
@@ -2731,7 +2797,7 @@ def pick_flight_at(flights, tap_x, tap_y, alt_x=None, alt_y=None):
     for flight in _visible_flights(flights):
         if not aircraft_alert.is_shown_on_radar(flight):
             continue
-        pos = _flight_screen_xy(flight)
+        pos = _tap_xy(flight)
         if not pos:
             continue
         x, y = pos
@@ -2755,7 +2821,7 @@ def flights_near(flights, tap_x, tap_y, radius_px):
     for flight in _visible_flights(flights):
         if not aircraft_alert.is_shown_on_radar(flight):
             continue
-        pos = _flight_screen_xy(flight)
+        pos = _tap_xy(flight)
         if not pos:
             continue
         d2 = (pos[0] - tap_x) ** 2 + (pos[1] - tap_y) ** 2

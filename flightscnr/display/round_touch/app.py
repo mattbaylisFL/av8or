@@ -2104,9 +2104,8 @@ class RoundTouchDisplay:
         elif action == "color_by_altitude":
             settings.toggle_color_by_altitude()
             radar.invalidate_frame_layer()
-        elif action == "smooth_motion":
-            settings.toggle_smooth_motion()
-            radar.invalidate_frame_layer()
+        elif action == "radar_motion":
+            self._open_atc_picker("radar_motion")
         elif action == "rim_style":
             self._open_atc_picker("rim_style")
         elif action == "precipitation":
@@ -2496,6 +2495,10 @@ class RoundTouchDisplay:
             return
         if kind == "rim_style":
             settings.set_rim_target_style(choice)
+            radar.invalidate_frame_layer()
+            return
+        if kind == "radar_motion":
+            settings.set_radar_motion(choice)
             radar.invalidate_frame_layer()
             return
         if kind == "min_height":
