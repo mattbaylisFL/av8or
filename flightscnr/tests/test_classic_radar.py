@@ -214,6 +214,7 @@ def scene(monkeypatch):
     """Three live targets right, below and left of centre; beam starts at 0."""
     cx, cy = float(theme.CENTER_X), float(theme.CENTER_Y)
     sprite = pygame.Surface((8, 8), pygame.SRCALPHA)
+    sprite.fill((255, 255, 255, 255))
     icons = [
         {"id": "east", "xy": (cx + 100, cy), "flight": {"heading": 0}, "color": (255, 255, 255), "vis": None},
         {"id": "south", "xy": (cx, cy + 100), "flight": {"heading": 0}, "color": (255, 255, 255), "vis": None},
@@ -228,6 +229,10 @@ def scene(monkeypatch):
     monkeypatch.setattr(radar, "_live_label_frame_cache", {})
     monkeypatch.setattr(radar, "_beam_latch", radar_classic.BeamLatch())
     monkeypatch.setattr(radar, "_held_tips", {})
+    monkeypatch.setattr(radar, "_ghosts", {})
+    monkeypatch.setattr(radar, "_classic_view", None)
+    monkeypatch.setattr(radar, "_CLASSIC_FADE", True)
+    monkeypatch.setattr(theme, "SWEEP_PERIOD_MS", 6000)
     monkeypatch.setattr(radar, "_held_frame", None)
     monkeypatch.setattr(radar, "_trail_selected_id", None)
     monkeypatch.setattr(radar, "_trail_projection_key", lambda size: "view")
@@ -250,9 +255,9 @@ def scene(monkeypatch):
             if st["id"] == ident:
                 st["xy"] = (st["xy"][0] + dx, st["xy"][1])
 
-    def frame(deg):
+    def frame(deg, now=1.0):
         angle["deg"] = deg
-        return radar.live_icon_frame(now=1.0)
+        return radar.live_icon_frame(now=now)
 
     return {"icons": icons, "painted": painted, "move": move, "frame": frame, "cx": cx, "cy": cy}
 
@@ -619,3 +624,144 @@ class TestPresentWithHeldTargets:
         assert calls == [("flip", None)]
         assert rotation._held_base is None
         assert display.get_at((68, 62))[:3] == (10, 20, 30)
+
+
+class TestFadeSteps:
+    def test_full_brightness_at_the_pass(self):
+        assert radar_classic.fade_level(0.0, 6.0) == 0
+        assert radar_classic.fade_brightness(0) == 1.0
+
+    def test_steps_down_to_the_floor_within_one_rotation(self):
+        levels = [radar_classic.fade_level(t, 6.0) for t in (0.5, 1.3, 2.5, 3.7, 4.9, 5.9)]
+        assert levels == [0, 1, 2, 3, 4, 4]
+        values = [radar_classic.fade_brightness(level) for level in range(5)]
+        assert values == sorted(values, reverse=True)
+        assert values[-1] == pytest.approx(radar_classic.FADE_FLOOR)
+
+    def test_a_target_on_the_scope_never_goes_below_the_floor(self):
+        assert radar_classic.fade_brightness(9) == pytest.approx(radar_classic.FADE_FLOOR)
+
+    def test_departed_paint_decays_to_nothing(self):
+        late = radar_classic.fade_brightness(6, holds_floor=False)
+        assert late <= radar_classic.FADE_GONE
+
+    def test_no_period_means_no_fade(self):
+        assert radar_classic.fade_level(3.0, 0.0) == 0
+
+
+class TestFadedSprites:
+    def test_level_zero_is_the_sprite_itself(self):
+        sprite = _dot((200, 100, 50, 255))
+        assert radar._faded(sprite, 0) is sprite
+
+    def test_dimmed_copy_keeps_colour_and_scales_alpha(self):
+        sprite = _dot((200, 100, 50, 255))
+        dim = radar._faded(sprite, 4)
+        assert dim is not sprite
+        assert dim.get_at((2, 2))[:3] == (200, 100, 50)
+        assert dim.get_at((2, 2))[3] == pytest.approx(255 * radar_classic.FADE_FLOOR, abs=2)
+        assert sprite.get_at((2, 2))[3] == 255
+
+    def test_same_level_reuses_the_copy(self):
+        sprite = _dot((200, 100, 50, 255))
+        assert radar._faded(sprite, 2) is radar._faded(sprite, 2)
+
+    def test_departed_paint_returns_none_when_gone(self):
+        sprite = _dot((200, 100, 50, 255))
+        assert radar._faded(sprite, 5, holds_floor=False) is not None
+        assert radar._faded(sprite, 6, holds_floor=False) is None
+
+
+class TestClassicFade:
+    def _alpha(self, key):
+        sprite = dict(radar.live_held_frame())[key][0]
+        return sprite.get_at((2, 2))[3]
+
+    def test_target_dims_between_passes_and_brightens_on_the_pass(self, scene):
+        scene["frame"](0.0, now=100.0)
+        assert self._alpha(("i", "south")) == 255
+        scene["frame"](90.0, now=101.5)
+        mid = self._alpha(("i", "south"))
+        scene["frame"](170.0, now=102.9)
+        low = self._alpha(("i", "south"))
+        assert 255 > mid > low
+        scene["frame"](181.0, now=103.1)
+        assert self._alpha(("i", "south")) == 255
+
+    def test_item_is_unchanged_within_a_step(self, scene):
+        scene["frame"](10.0, now=100.0)
+        scene["frame"](20.0, now=101.3)
+        first = dict(radar.live_held_frame())[("i", "west")]
+        scene["frame"](30.0, now=101.9)
+        assert dict(radar.live_held_frame())[("i", "west")] == first
+
+    def test_selected_target_stays_at_full_brightness(self, scene, monkeypatch):
+        monkeypatch.setattr(radar, "_trail_selected_id", "west")
+        scene["frame"](0.0, now=100.0)
+        frame = scene["frame"](10.0, now=104.0)
+        assert frame[0][0].get_at((2, 2))[3] == 255
+
+    def test_fade_can_be_switched_off(self, scene, monkeypatch):
+        monkeypatch.setattr(radar, "_CLASSIC_FADE", False)
+        scene["frame"](0.0, now=100.0)
+        scene["frame"](90.0, now=104.0)
+        assert self._alpha(("i", "south")) == 255
+
+    def test_tag_dims_with_its_icon(self, scene, monkeypatch):
+        tag = _dot((255, 255, 255, 255), 20)
+        monkeypatch.setattr(radar, "_live_labels", [{"id": "south", "vis": object(), "off": (12, 0)}])
+        monkeypatch.setattr(radar, "_place_sprite", lambda vis, fx, fy: (tag, int(fx), int(fy)))
+        scene["frame"](0.0, now=100.0)
+        assert self._alpha(("l", "south")) == 255
+        scene["frame"](90.0, now=103.0)
+        assert self._alpha(("l", "south")) == self._alpha(("i", "south")) < 255
+
+
+class TestDepartedTargetsFadeOut:
+    def _depart(self, scene, monkeypatch, ident):
+        remaining = [st for st in scene["icons"] if st["id"] != ident]
+        monkeypatch.setattr(radar, "_live_pending", (remaining, [], {}))
+        radar._publish_live_specs()
+
+    def test_departed_target_keeps_its_paint(self, scene, monkeypatch):
+        scene["frame"](0.0, now=100.0)
+        self._depart(scene, monkeypatch, "west")
+        scene["frame"](10.0, now=100.5)
+        assert ("i", "west") in dict(radar.live_held_frame())
+
+    def test_departed_paint_decays_past_the_floor_then_goes(self, scene, monkeypatch):
+        scene["frame"](0.0, now=100.0)
+        self._depart(scene, monkeypatch, "west")
+        scene["frame"](10.0, now=106.5)
+        alpha = dict(radar.live_held_frame())[("i", "west")][0].get_at((2, 2))[3]
+        assert 0 < alpha < 255 * radar_classic.FADE_FLOOR
+        scene["frame"](20.0, now=108.0)
+        assert ("i", "west") not in dict(radar.live_held_frame())
+        assert "west" not in radar._ghosts
+
+    def test_zoom_clears_old_paint(self, scene, monkeypatch):
+        scene["frame"](0.0, now=100.0)
+        self._depart(scene, monkeypatch, "west")
+        monkeypatch.setattr(radar, "_trail_projection_key", lambda size: "zoomed")
+        scene["frame"](10.0, now=100.5)
+        assert ("i", "west") not in dict(radar.live_held_frame())
+
+    def test_no_ghosts_with_fade_off(self, scene, monkeypatch):
+        monkeypatch.setattr(radar, "_CLASSIC_FADE", False)
+        scene["frame"](0.0, now=100.0)
+        self._depart(scene, monkeypatch, "west")
+        scene["frame"](10.0, now=100.5)
+        assert ("i", "west") not in dict(radar.live_held_frame())
+
+    def test_no_ghosts_in_smooth_motion(self, scene, monkeypatch):
+        monkeypatch.setattr(settings, "classic_radar_enabled", lambda: False)
+        scene["frame"](0.0, now=100.0)
+        self._depart(scene, monkeypatch, "west")
+        assert radar._ghosts == {}
+
+    def test_last_target_leaving_still_fades(self, scene, monkeypatch):
+        scene["frame"](0.0, now=100.0)
+        monkeypatch.setattr(radar, "_live_pending", ([], [], {}))
+        radar._publish_live_specs()
+        assert scene["frame"](10.0, now=100.5) == []
+        assert len(radar.live_held_frame()) == 3

@@ -13,6 +13,7 @@ import math
 import os
 import threading
 import time
+import weakref
 
 import pygame
 
@@ -1446,6 +1447,16 @@ _held_frame: list | None = None
 # moves the baked trail heads every few seconds; following them would redraw
 # every held tip between passes.
 _held_tips: dict = {}
+# Classic motion paint fade. Off with FLIGHTSCNR_CLASSIC_FADE=0.
+_CLASSIC_FADE = os.environ.get("FLIGHTSCNR_CLASSIC_FADE", "1").strip().lower() not in (
+    "0", "false", "off", "no",
+)
+# Dimmed copies of a sprite per fade level, kept while the sprite is alive.
+_fade_cache: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+# Targets that left the scope, still decaying: {id: (painted_at, [(kind, item), ...])}.
+# Filled by the layer worker when it prunes a target, drained by the display.
+_ghosts: dict = {}
+_classic_view = None
 # 4 ms: on a Pi 4 a refresh costs ~0.6 ms per target, so ~6 targets a frame and
 # each one every ~6 frames with 40 on screen. They move well under a pixel per
 # frame; at 6 ms the pass alone pushed busy frames past the 33 ms budget.
@@ -1466,12 +1477,24 @@ def _publish_live_specs() -> None:
         _live_icons, _live_labels, _live_heads = _live_pending
         keep = {st["id"] for st in _live_icons}
         _live_ids = keep
+        ghosts = _CLASSIC_FADE and settings.classic_radar_enabled()
+        labels = _live_label_frame_cache.copy()
         for cache in (_live_frame_cache, _live_label_frame_cache):
             # The display thread can update/clear these while the layer worker
             # publishes. A shallow copy is atomic under the GIL and gives this
             # worker a stable set of keys to prune.
             for key in [key for key in cache.copy() if key not in keep]:
-                cache.pop(key, None)
+                gone = cache.pop(key, None)
+                if ghosts and cache is _live_frame_cache and gone is not None and len(gone) > 3:
+                    # Classic motion: the paint stays and decays (see _ghost_items).
+                    parts = []
+                    if gone[2] is not None:
+                        parts.append(("g", gone[2]))
+                    parts.append(("i", gone[1]))
+                    label = labels.get(key)
+                    if label is not None:
+                        parts.append(("l", tuple(label[1:4])))
+                    _ghosts[key] = (gone[3], parts)
         if _live_icons:
             _live_frame_cursor %= len(_live_icons)
         else:
@@ -1668,8 +1691,64 @@ def _classic_due_ids(icons) -> list:
         bearings[ident] = radar_classic.bearing_deg(x, y, cx, cy)
         if st.get("live") or ident == _trail_selected_id:
             live.append(ident)
+    global _classic_view
     view = _trail_projection_key((theme.SIZE, theme.SIZE))
+    if view != _classic_view:
+        # Old paint belongs to the old zoom or pan.
+        _classic_view = view
+        _ghosts.clear()
     return _beam_latch.due(current_sweep_angle(), view, bearings, live)
+
+
+def _faded(sprite: pygame.Surface, level: int, *, holds_floor: bool = True):
+    """``sprite`` dimmed to a fade level, or None once the paint is gone."""
+    if level <= 0:
+        return sprite
+    if holds_floor:
+        level = min(level, radar_classic.FADE_LEVELS - 1)
+    brightness = radar_classic.fade_brightness(level, holds_floor=holds_floor)
+    if brightness <= radar_classic.FADE_GONE:
+        return None
+    bucket = _fade_cache.get(sprite)
+    if bucket is None:
+        bucket = _fade_cache[sprite] = {}
+    dim = bucket.get(level)
+    if dim is None:
+        dim = sprite.copy()
+        dim.fill(
+            (255, 255, 255, int(round(255 * brightness))),
+            special_flags=pygame.BLEND_RGBA_MULT,
+        )
+        bucket[level] = dim
+    return dim
+
+
+def _fade_level_at(painted_at, now: float) -> int:
+    if not _CLASSIC_FADE or painted_at is None:
+        return 0
+    return radar_classic.fade_level(now - painted_at, theme.SWEEP_PERIOD_MS / 1000.0)
+
+
+def _ghost_items(now: float) -> list:
+    """Held items for targets that left the scope, dimmer each step until gone."""
+    out = []
+    for ident, (painted_at, parts) in _ghosts.copy().items():
+        level = _fade_level_at(painted_at, now)
+        if not _CLASSIC_FADE or ident in _live_frame_cache:
+            # Fade off: gone at once, as before. Painted again: the fresh
+            # return replaces the old paint.
+            _ghosts.pop(ident, None)
+            continue
+        items = []
+        for kind, (sprite, x, y) in parts:
+            dim = _faded(sprite, level, holds_floor=False)
+            if dim is not None:
+                items.append(((kind, ident), (dim, x, y)))
+        if not items:
+            _ghosts.pop(ident, None)
+            continue
+        out.extend(items)
+    return out
 
 
 def live_held_frame() -> list | None:
@@ -1687,7 +1766,10 @@ def live_icon_frame(now: float | None = None) -> list:
     _live_connectors = []
     icons = _live_icons
     if not icons:
-        _held_frame = [] if settings.classic_radar_enabled() else None
+        now = time.time() if now is None else now
+        _held_frame = _ghost_items(now) if settings.classic_radar_enabled() else None
+        if _held_frame is None:
+            _ghosts.clear()
         _held_tips.clear()
         _label_hits.clear()
         _live_frame_cache.clear()
@@ -1766,6 +1848,7 @@ def live_icon_frame(now: float | None = None) -> list:
                 (float(fx), float(fy)),
                 _clip_to_display(sprite, ix, iy),
                 glow_item,
+                now,
             )
             processed_ids.append(ident)
             _live_frame_cursor = (index_by_id[ident] + 1) % count
@@ -1854,14 +1937,24 @@ def live_icon_frame(now: float | None = None) -> list:
 
     glows = []
     out = []
+    fade_levels: dict = {}
     for st in icons:
         cached = _live_frame_cache.get(st["id"])
         if cached is None:
             continue
         if held is not None and st["id"] not in moving:
+            level = _fade_level_at(cached[3] if len(cached) > 3 else None, now)
+            fade_levels[st["id"]] = level
+            if level <= 0:
+                if cached[2] is not None:
+                    held["g"].append((("g", st["id"]), cached[2]))
+                held["i"].append((("i", st["id"]), cached[1]))
+                continue
             if cached[2] is not None:
-                held["g"].append((("g", st["id"]), cached[2]))
-            held["i"].append((("i", st["id"]), cached[1]))
+                sprite, x, y = cached[2]
+                held["g"].append((("g", st["id"]), (_faded(sprite, level), x, y)))
+            sprite, x, y = cached[1]
+            held["i"].append((("i", st["id"]), (_faded(sprite, level), x, y)))
             continue
         if cached[2] is not None:
             glows.append(cached[2])
@@ -1876,7 +1969,9 @@ def live_icon_frame(now: float | None = None) -> list:
             continue
         _vis_id, sprite, ix, iy = cached
         if held is not None and lb["id"] not in moving:
-            held["l"].append((("l", lb["id"]), (sprite, ix, iy)))
+            # The tag dims with its icon.
+            dim = _faded(sprite, fade_levels.get(lb["id"], 0))
+            held["l"].append((("l", lb["id"]), (dim, ix, iy)))
         else:
             out.append((sprite, ix, iy))
         _label_hits.append((
@@ -1884,9 +1979,13 @@ def live_icon_frame(now: float | None = None) -> list:
             pygame.Rect(ix - sprite.get_width() // 2, iy - sprite.get_height() // 2,
                         sprite.get_width(), sprite.get_height()),
         ))
-    _held_frame = (
-        None if held is None else held["c"] + held["g"] + held["i"] + held["l"]
-    )
+    if held is None:
+        _held_frame = None
+        _ghosts.clear()
+    else:
+        _held_frame = (
+            held["c"] + _ghost_items(now) + held["g"] + held["i"] + held["l"]
+        )
     return out
 
 
