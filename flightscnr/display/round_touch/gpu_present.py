@@ -19,8 +19,9 @@ frame with textures:
   nothing;
 - trail tips are a stretched 1x1 texture, the sweep wedge is drawn once and
   rotated;
-- the HUD, tiles and menus are stamped by the existing CPU helpers onto one
-  transparent overlay texture, and only the parts that changed are uploaded.
+- the HUD pill is a texture uploaded when it rebuilds; bubbles, tiles and
+  menus are stamped by the existing CPU helpers onto one transparent overlay
+  texture, and only the parts that changed are uploaded.
 
 There is no dirty-rect bookkeeping: nothing drawn here persists to the next
 frame.
@@ -52,6 +53,8 @@ _overlay = None
 _overlay_tex = None
 _overlay_prev: list = []
 _overlay_shown = False
+_hud_tex = None
+_hud_key = None
 
 
 def reset() -> None:
@@ -59,6 +62,9 @@ def reset() -> None:
     global _base_tex, _base_size, _base_key, _base_scratch, _renderer_ref
     global _pixel_tex, _sweep_tex, _sweep_key, _rim_tex, _rim_key
     global _overlay, _overlay_tex, _overlay_prev, _overlay_shown
+    global _hud_tex, _hud_key
+    _hud_tex = None
+    _hud_key = None
     _base_tex = None
     _base_size = None
     _base_key = None
@@ -224,8 +230,43 @@ def _draw_sweep(ren, angle_disp: float, color, centre) -> None:
     )
 
 
+def _draw_hud(ren, origin_off, rotation: int) -> None:
+    """The curved HUD pill as its own texture, uploaded only when it rebuilds.
+
+    Same placement as ``rotation._blit_hud_overlay``. It is on screen all the
+    time, so stamping it into the overlay texture would upload it every frame.
+    """
+    from display.round_touch import rotation as rot
+
+    global _hud_tex, _hud_key
+    try:
+        from display.round_touch import radar_hud, settings
+    except ImportError:
+        return
+    if not settings.radar_hud_enabled():
+        return
+    rot_hud = rot._ensure_rot_hud(rotation)
+    if rot_hud is None:
+        return
+    logical = radar_hud.hud_bounds()
+    if logical.width <= 0 or logical.height <= 0:
+        src = rot_hud.get_rect()
+    else:
+        size = rot_hud.get_width()
+        src = rot._rotate_rect_aabb(logical.inflate(2, 2), rotation, size)
+        src = src.clip(pygame.Rect(0, 0, size, rot_hud.get_height()))
+        if src.width <= 0 or src.height <= 0:
+            return
+    key = (rot._rot_hud_key, tuple(src))
+    if _hud_tex is None or _hud_key != key:
+        _hud_tex = _video().Texture.from_surface(ren, rot_hud.subsurface(src))
+        _hud_tex.blend_mode = _BLEND
+        _hud_key = key
+    _hud_tex.draw(dstrect=(src.x + origin_off[0], src.y + origin_off[1]))
+
+
 def _draw_overlays(ren, display: pygame.Surface, origin_off, rotation: int) -> None:
-    """HUD, bubbles, tiles and menus through the CPU helpers, as one texture."""
+    """Bubbles, tiles and menus through the CPU helpers, as one texture."""
     from display.round_touch import rotation as rot
 
     global _overlay, _overlay_tex, _overlay_prev, _overlay_shown
@@ -242,7 +283,6 @@ def _draw_overlays(ren, display: pygame.Surface, origin_off, rotation: int) -> N
         _overlay.fill((0, 0, 0, 0), rect)
     rects = []
     for stamp in (
-        rot._blit_hud_overlay,
         rot._blit_update_bubble,
         rot._blit_airport_callout,
         rot._blit_location_toast,
@@ -348,6 +388,7 @@ def present_radar_sweep(
         frame_debug.count("live_icons", len(live_icons or ()))
         frame_debug.count("held_items", len(held or ()))
         _t = time.perf_counter()
+    _draw_hud(ren, origin_off, rotation)
     _draw_overlays(ren, display, origin_off, rotation)
     if debug:
         frame_debug.stage("4g_overlay", time.perf_counter() - _t)

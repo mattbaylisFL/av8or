@@ -30,6 +30,7 @@ from display.round_touch import rotation as rotation_mod  # noqa: E402
 from display.round_touch.screens import radar  # noqa: E402
 
 SIDE = 200
+_REAL_DRAW_HUD = gpu_present._draw_hud
 
 
 @pytest.fixture
@@ -66,6 +67,7 @@ def software_renderer(monkeypatch):
         "_blit_airport_tile", "_blit_favourite_tile", "_blit_radial_menu",
     ):
         monkeypatch.setattr(rotation_mod, name, lambda *_a, **_k: None)
+    monkeypatch.setattr(gpu_present, "_draw_hud", lambda *_a, **_k: None)
     monkeypatch.setattr(gpu, "_renderer", ren)
     monkeypatch.setattr(gpu, "_active", True)
     monkeypatch.setattr(gpu, "_healthy", True)
@@ -336,7 +338,7 @@ class TestHeldAlpha:
             surface.blit(pill, rect)
             return rect
 
-        monkeypatch.setattr(rotation_mod, "_blit_hud_overlay", hud)
+        monkeypatch.setattr(rotation_mod, "_blit_update_bubble", hud)
         base = pygame.Surface((SIDE, SIDE))
         base.fill((10, 20, 30))
         display = pygame.Surface((SIDE, SIDE))
@@ -393,3 +395,63 @@ class TestFadeFollowsTheRenderer:
         assert ("i", "b") not in radar._held_alpha_next
         assert radar._fade(("i", "c"), sprite, 100.0, 110.0, holds_floor=False) is None
         radar._held_alpha_next.clear()
+
+
+class TestHudTexture:
+    def _hud(self, monkeypatch, color, gen):
+        from display.round_touch import radar_hud
+
+        hud = pygame.Surface((SIDE, SIDE), pygame.SRCALPHA)
+        hud.fill((0, 0, 0, 0))
+        hud.fill(color, (120, 60, 40, 80))
+        monkeypatch.setattr(settings, "radar_hud_enabled", lambda: True)
+        monkeypatch.setattr(radar_hud, "overlay_snapshot", lambda: (hud, gen))
+        monkeypatch.setattr(radar_hud, "rotated_overlay_snapshot", lambda _r: (None, None))
+        monkeypatch.setattr(radar_hud, "hud_bounds", lambda: pygame.Rect(120, 60, 40, 80))
+
+    def test_hud_uploads_once_per_rebuild(self, software_renderer, monkeypatch):
+        monkeypatch.setattr(gpu_present, "_draw_hud", _REAL_DRAW_HUD)
+        monkeypatch.setattr(rotation_mod, "rotation_degrees", lambda: 0)
+        monkeypatch.setattr(rotation_mod, "_rot_hud", None)
+        monkeypatch.setattr(rotation_mod, "_rot_hud_key", None)
+        self._hud(monkeypatch, (255, 255, 255, 255), 1)
+        base = pygame.Surface((SIDE, SIDE))
+        base.fill((10, 20, 30))
+        display = pygame.Surface((SIDE, SIDE))
+        rotation_mod.present_radar_sweep(display, base, 1, 0.0, (0, 0, 0), draw_sweep=False)
+        first = gpu_present._hud_tex
+        got = _shot(software_renderer)
+        assert got.get_at((140, 100))[:3] == (255, 255, 255)
+        assert got.get_at((100, 100))[:3] == (10, 20, 30)
+        rotation_mod.present_radar_sweep(display, base, 1, 0.0, (0, 0, 0), draw_sweep=False)
+        assert gpu_present._hud_tex is first
+        self._hud(monkeypatch, (255, 0, 0, 255), 2)
+        rotation_mod.present_radar_sweep(display, base, 1, 0.0, (0, 0, 0), draw_sweep=False)
+        assert gpu_present._hud_tex is not first
+        assert _shot(software_renderer).get_at((140, 100))[:3] == (255, 0, 0)
+
+
+class TestPortalControl:
+    def test_portal_offers_both_renderers(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "web", "templates", "index.html"), encoding="utf-8") as handle:
+            html = handle.read()
+        assert '<select id="renderer">' in html
+        for value in gpu.RENDERERS:
+            assert f'<option value="{value}"' in html
+        assert html.count('renderer: $("renderer")') == 2
+
+    def test_every_locale_has_the_renderer_strings(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        locales = os.path.join(root, "i18n", "locales")
+        for name in sorted(os.listdir(locales)):
+            path = os.path.join(locales, name, "messages.json")
+            if not os.path.isfile(path):
+                continue
+            with open(path, encoding="utf-8") as handle:
+                messages = json.load(handle)
+            for key in ("label", "cpu", "gpu", "hint", "failed", "active"):
+                assert messages.get(f"portal.radar.renderer.{key}"), (name, key)
+
+    def test_settings_and_gpu_agree_on_the_choices(self):
+        assert settings.RENDERERS == gpu.RENDERERS
