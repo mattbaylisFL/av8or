@@ -120,6 +120,9 @@ RIM_TARGET_STYLE_LABELS = {
 # steps them at each data update, "smooth" glides them every frame, "classic"
 # repaints each target only when the sweep passes its bearing.
 RADAR_MOTIONS = ("standard", "smooth", "classic")
+# Renderer: "cpu" draws on software surfaces (the default), "gpu" draws the
+# radar with textures when the device has an accelerated renderer (see gpu.py).
+RENDERERS = ("cpu", "gpu")
 RADAR_MOTION_LABELS = {
     "standard": "settings.opt.motion.standard",
     "smooth": "settings.opt.motion.smooth",
@@ -2980,6 +2983,26 @@ def set_radar_motion(value: str) -> str:
     _state["smooth_motion"] = mode != "standard"
     _save(_state)
     return radar_motion_setting()
+
+
+def renderer_setting() -> str:
+    """Saved renderer: cpu (default) | gpu. Takes effect when the app restarts."""
+    raw = str(_state.get("renderer") or "").strip().lower()
+    return raw if raw in RENDERERS else "cpu"
+
+
+def set_renderer(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    _state["renderer"] = raw if raw in RENDERERS else "cpu"
+    _save(_state)
+    # Saving the choice again is the way to retry after a failed GPU start.
+    try:
+        from display.round_touch import gpu
+
+        gpu.clear_state()
+    except Exception:
+        pass
+    return renderer_setting()
 
 
 def classic_radar_enabled() -> bool:
