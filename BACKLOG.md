@@ -371,7 +371,24 @@ Five phases, each a release to look at on the Pi:
   derives that from the real mapping for 0, 90, 180 and 270. Screenshots on the Pi confirm bright paint directly
   behind the beam. Lesson: check beam-relative behaviour on the rotated panel, not from logic in logical space; the
   earlier screenshot checks only showed that fading varied by bearing, not that it was aligned.
-- Phase 5: final numbers, docs.
+- Slow-frame work after phase 4 (2026-11-16). The phase 4 captures showed the full restamp of every held target at
+  each layer swap in 106 of 149 slow frames (15 to 30 ms). DONE release 2026.11.16.20: staged swap
+  (rotation._held_stage_step, 3 ms a frame onto the next base while the old picture stays up; fallback to a full
+  restamp now by changed area, not rect count). DONE release 2026.11.16.21: the stage stamps the held frame as it
+  will be on the new layer (radar.live_held_frame_for, tips against _heads_by_gen), and the swap frame skips the
+  incremental update, so the tips are not all redrawn after the swap.
+- Phase 5 numbers, same-hour interleaved A/B on the Pi (smooth, classic, smooth, classic; 5 min each; mode switched
+  through the settings file; release 2026.11.16.21; 63 to 64 targets): gaps over 66 ms per minute 19.8/19.2 smooth
+  against 11.6/11.4 classic; over 100 ms 1.2/1.6 against 0.4/1.2; over 48 ms 47.0/54.6 against 42.4/43.8.
+  4_present 21.3/22.5 against 12.5/12.8 ms, 4L_live_frame 6.4/6.7 against 2.8/2.7, 4h_held 1.7, 4h_stage 3.0 on
+  stage frames. The run before it (2026.11.16.20, 59 to 79 targets): 21.6/19.8 against 13.4/9.6, over 100 ms
+  4.4/2.4 against 0.8/1.0. So classic with fade, rim sprites and trails cuts frames over 66 ms by about 40 percent;
+  the phase 2 figure (2 to 3 a minute) did not survive those additions.
+  STILL OPEN: of ~48 slow classic frames per 5 min, 30 to 34 coincide with a layer rebuild on the worker (GIL), and
+  29 still show 8 to 22 ms in 4h_held. Not yet pinned down; suspects are tag changes at each publish (the worker's
+  label layout adds and drops tags, each a large rect with many overlapping items to restamp) and fade steps of
+  overlapping tags. Next probe: count and area of held rects per frame by key kind, and restamps per rect.
+- Phase 5 remaining: docs.
 Unrelated, seen 2026-11-16 in a fresh venv: tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart
 fails on its own on main (a pixel outside the chart differs); not from this work.
 
