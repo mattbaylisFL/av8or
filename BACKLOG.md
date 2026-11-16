@@ -388,7 +388,30 @@ Five phases, each a release to look at on the Pi:
   29 still show 8 to 22 ms in 4h_held. Not yet pinned down; suspects are tag changes at each publish (the worker's
   label layout adds and drops tags, each a large rect with many overlapping items to restamp) and fade steps of
   overlapping tags. Next probe: count and area of held rects per frame by key kind, and restamps per rect.
-- Phase 5 remaining: docs.
+- Phase 5 DONE 2026-11-16: .env.example documents the motion override and FLIGHTSCNR_CLASSIC_FADE; README has no
+  motion section to update. ACCEPTED by Matt 2026-11-16 at the measured level (about 40 percent fewer frames over
+  66 ms than smooth). The STILL OPEN item above (8 to 22 ms held updates in slow frames) stays as CPU-side follow-up.
+
+## Next: GPU-driven radar renderer behind a portal setting (requested by Matt 2026-11-16)
+
+After classic radar ships, look into a parallel GPU-driven version of the radar display, selectable in the portal
+beside the current CPU path (which stays the default until the GPU path is proven), so classic radar and other
+features can be enhanced.
+Why: the CPU path is at its budget on the Pi 4. Every change to the picture costs CPU blits plus an X11 upload of
+the changed rects, which is why the paint fade is 5 steps and not continuous, and why a per-frame fade or more
+steps were ruled out. With textures, brightness is a per-draw alpha value and a continuous fade is nearly free.
+Confirmed on the Pi 2026-11-16: Pi 4 Model B Rev 1.5, dtoverlay=vc4-kms-v3d, v3d and vc4 modules loaded,
+/dev/dri/renderD128 present, so the VideoCore VI GPU (OpenGL ES 3.1 class) is available. pygame 2.6.1 on SDL
+2.32.4, which ships pygame._sdl2 (Renderer and Texture). The service runs SDL_VIDEODRIVER=x11 under lightdm.
+Not confirmed: that an accelerated SDL renderer actually comes up under this X11 kiosk (glxinfo is not installed),
+how texture uploads of the 720x720 base perform, and behaviour on other fleet hardware (Pi 3, Pi 5, Zero 2).
+First steps: (1) a standalone probe on the Pi: create an SDL2 Renderer, report its driver name and flags, time a
+full-screen textured frame with ~150 alpha-modulated sprites and a base texture upload. (2) If accelerated, a
+renderer interface behind the fast present path (rotation.present_radar_sweep) with the CPU path as one backend:
+base as a texture, targets as textures with per-draw alpha, beam as geometry. (3) Portal setting, default CPU,
+automatic fallback when no accelerated renderer is found. (4) Same interleaved A/B method as the classic work.
+Things a GPU path would unlock: continuous paint fade and beam afterglow, per-frame motion for all targets without
+the live icon budget, smoother map pan and zoom.
 Unrelated, seen 2026-11-16 in a fresh venv: tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart
 fails on its own on main (a pixel outside the chart differs); not from this work.
 
