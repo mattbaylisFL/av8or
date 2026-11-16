@@ -454,3 +454,114 @@ so a synced upstream release showed only "Synced from ..." and our own releases 
 DONE: .github/scripts/release-notes.py writes both bodies (changes under What's Changed, credit under About, PR
 numbers and at-mentions stripped); release-av8or.yml and sync-upstream.yml call it; tests/test_release_notes.py
 checks the output through the device parser. Releases published before this keep their old bodies unless edited.
+
+## Portal HTTPS on the .local name (investigated 2026-11-16, nothing shipped, waiting on Matt's choice)
+
+Ask: the portal at `http://<hostname>.local` should load without the user editing `https` back to `http`, ideally
+with free auto-renewed certificates, and it must work for a recipient with no accounts or domain.
+
+How it is served today (read from the code and the Pi, read-only):
+- `flightscnr.py` spawns `web/app.py` with `subprocess.Popen`; it ends in `app.run(host="0.0.0.0", port=WEB_PORT)`,
+  the Werkzeug dev server, plain HTTP, port 80 by default, as root (systemd unit `User=root`). No TLS code, no
+  reverse proxy, no login on the portal, no HSTS header anywhere.
+- On the Pi: listeners are 80 (python), 22 and 111 only. Nothing on 443 and no firewall rules, so 443 answers with
+  an immediate TCP reset (connection refused), not a silent drop. avahi-daemon is active with no extra service
+  files (name only). `openssl` is installed; nginx, caddy, certbot, tailscale, cloudflared are not.
+- avahi also answers AAAA for the name, but the portal binds IPv4 only, so IPv6 attempts on port 80 are refused
+  and the browser falls back to IPv4. Harmless today, one more failed attempt per load.
+- The URL is advertised as text only: `config.web_portal_url()` (always `http://`) on the Info and Tracked screens
+  and in the installer output. The only QR code is the Wi-Fi join QR on the setup screen; the hotspot portal is
+  `http://10.42.0.1/wifi` with a catch-all captive DNS. There is no QR for the portal URL.
+- The portal uses no browser API that needs a secure context (no geolocation, clipboard, service worker).
+- The failure today: an explicit `https://<hostname>.local` (typed, a bookmark, or address-bar autocomplete that
+  remembered https) gets "connection refused" (Chrome ERR_CONNECTION_REFUSED, Safari "can't connect to the
+  server"). Chromium's own guide says an explicitly https navigation that fails gets a normal error page and no
+  fallback to HTTP. Automatic upgrades of `http://` or scheme-less entries are different: Chrome, Firefox 136+
+  and Safari 18.2+ try HTTPS and fall back to HTTP when it fails, and a fast refusal makes that fallback instant.
+  NOT verified: which browser and entry method Matt actually hits; Safari's exact rules for typed addresses
+  (sources disagree).
+
+The hard constraint (checked against current documents, not memory):
+- CA/Browser Forum Baseline Requirements v2.3.1 (2026-10-04), section 4.2.2: "CAs SHALL NOT issue Certificates
+  containing Internal Names or Reserved IP Addresses". An Internal Name is one that does not end in a TLD in the
+  IANA root zone; `.local` is not in it (RFC 6762 reserves it for mDNS). Reserved IP Addresses are the IANA
+  special-purpose registries, which include every RFC 1918 LAN range.
+- Let's Encrypt: HTTP-01 and TLS-ALPN-01 need Let's Encrypt to reach the host from the internet; DNS-01 needs a
+  real public DNS name. Its IP certificates (general availability 2026-01-15, 6-day lifetime) are for public IPs
+  only. dns-persist-01 (announced 2026-02) is not on the challenge-types page yet and would not change this.
+- So no public CA can ever issue for `<hostname>.local` or the LAN IP. A padlock on the `.local` name is only
+  possible with a CA the user installs on each phone or computer. A public-CA certificate is only possible for a
+  different, public DNS name that happens to resolve to the LAN IP.
+
+Options compared:
+1. Public DNS name per device plus DNS-01 (the Plex `plex.direct` pattern). Device gets a name such as
+   `<random-id>.<our-domain>` with an A record for its LAN IP and a Let's Encrypt cert; the portal URL becomes
+   that name, the `.local` URL redirects to it. Unattended and auto-renewing, real padlock, nothing for the
+   recipient to install. Cost and catches: someone must own a domain, run the DNS zone and a small broker service
+   that holds the DNS API token and answers ACME challenges for devices (the token must never ship on devices or
+   in this public repo). That someone is Matt, forever, for every recipient and every fork: about 10 to 15 USD a
+   year for the domain, hosting can be free tier. Let's Encrypt allows 50 new certs per registered domain per
+   week (renewals exempt), fine for a small fleet. Privacy: every device name lands in public Certificate
+   Transparency logs and LAN IPs sit in public DNS (use random ids, never hostnames). Breaks when the internet
+   is down, in the setup hotspot, and behind routers with DNS rebinding protection (they drop public names that
+   resolve to private IPs). A typed `https://<hostname>.local` still fails, because the cert is for the other
+   name. A single shared wildcard cert with its key in the repo (the local-ip.sh style) is ruled out: a
+   published private key must be revoked under the CA rules and lets anyone on the LAN impersonate any device.
+   The do-it-yourself variant (recipient brings a domain and a DNS API token) works but fails the "no accounts"
+   requirement.
+2. Local CA. The device creates its own CA on first boot, issues itself a leaf cert for `<hostname>.local`
+   (renewed automatically, under 398 days for Apple), serves 443, and offers the CA for download. Free, offline,
+   no third party, covers the real `.local` name. The cost is the one-time trust step on every client device:
+   iOS (download profile, Settings, install, then General, About, Certificate Trust Settings, enable full
+   trust: about 8 taps and two warnings), Android (Settings, Security, install CA certificate, plus a permanent
+   "network may be monitored" notice), macOS (Keychain, set Always Trust, admin password), Windows (import to
+   Trusted Root, confirm), Firefox (own store on some platforms). That is far more work than typing `http://`
+   once, the CA arrives over plain HTTP, and installing a root CA is a bad habit to teach recipients (mitigate
+   with name constraints and a key that never leaves the device). Until trusted, 443 shows a full-page
+   certificate warning. Plain self-signed without the CA step is the same warning with no way out.
+3. No TLS, fix the symptom. Keep 443 closed and fast-refusing (already true: this is what lets automatic
+   upgrades fall back instantly), never send HSTS, and hand people a link with the scheme in it: a QR code on
+   the Info screen for `http://<hostname>.local` (the `qrcode` dependency is already installed), plus an
+   IP-based QR as a fallback for phones where mDNS fails. Free, no accounts, works offline. It does not rescue
+   someone who types or autocompletes `https://`; that case needs either option 2 or a helper listener on 443
+   with a throwaway self-signed cert that redirects to `http://`. The helper turns "refused, edit the URL" into
+   "certificate warning, tap through, redirected", but it may also change what the automatic upgrade does
+   (cert error instead of refusal; whether each browser still falls back silently is NOT verified, sources
+   conflict), so it must be tested before it is ever on by default.
+4. Tunnels and relays. `tailscale cert` gives a Let's Encrypt cert for `<machine>.<tailnet>.ts.net`, but needs a
+   Tailscale account, HTTPS enabled on the tailnet, the client devices on the same tailnet, and publishes machine
+   names in CT logs. Cloudflare Tunnel needs an account and a domain, and puts a portal with no login (it holds
+   API keys and Wi-Fi setup) on the public internet. Both are fine as a documented opt-in for an owner who
+   already uses them; neither fits a device handed to someone else.
+5. Nothing else credible turned up. There is still no standard for browser-trusted HTTPS on local devices, and
+   Chrome's 2026 "Always Use Secure Connections" default explicitly exempts local names, private IPs and
+   single-label hosts from its HTTP warning because they cannot get certificates.
+
+Recommendation: option 3 now, option 2 as an opt-in later, option 1 only if Matt wants to run a service.
+Free auto-renewed public certificates for the `.local` name do not exist, and the only public-cert route (1)
+makes every recipient depend on a domain and broker Matt operates, with internet and router caveats.
+Plan for option 3 (no new packages, all changes ride the normal `git pull --ff-only` OTA, unit file and
+`scripts/release.sh` untouched, boot disclaimer untouched):
+- `config.py`: keep `web_portal_url()` as is; add an IP-based variant for the QR fallback.
+- `display/round_touch/screens/info.py` (and the Tracked hint): draw a portal QR with the explicit `http://` URL,
+  reusing the QR helper from `screens/wifi_setup.py`.
+- `web/app.py`: bind dual-stack so the AAAA answer works; add a test that no response carries
+  `Strict-Transport-Security`; a test for the QR payload scheme.
+- Docs: one line in README/AV8OR.md on why the address is `http://`.
+- Only after an on-device test Matt approves: optional 443 helper behind a new `WEB_HTTPS_REDIRECT=0|1` (default 0,
+  documented in `.env.example`), disabled in the setup hotspot so captive-portal probes keep seeing a refusal.
+Option 2 later would add `WEB_HTTPS=off|local-ca` and `WEB_HTTPS_PORT=443` in `.env.example`, key material under
+`FLIGHTSCNR_DATA_DIR` (mode 600, never in the repo or diagnostics bundle), a "Trust this device" portal page, and
+leaf reissue on hostname change. Existing fleet devices would get it by OTA with the default off.
+
+Needed from Matt before building: which browser and device show the failure and how the address is entered
+(typed bare, typed with a scheme, bookmark, autocomplete), and permission to open a temporary 443 listener on
+the Pi to test the helper across Safari (iOS and macOS), Chrome and Firefox. Nothing was changed on the Pi.
+Not verified: Safari typed-address upgrade rules, per-browser fallback on a certificate error, whether Chrome
+154's default shipped exactly as announced, router rebinding behaviour for option 1.
+
+Sources: cabforum/servercert `docs/BR.md` v2.3.1 (sections 1.6.1, 4.2.2, 7.1.2.7.12);
+letsencrypt.org/docs/challenge-types (updated 2026-02-12), /docs/certificates-for-localhost, /docs/rate-limits
+(updated 2026-08-05), /2026/01/15/6day-and-ip-general-availability; Chromium
+`docs/security/ask-before-http/ask-before-http-adoption-guide.md`; attackanddefense.dev HTTPS-First in Firefox 136;
+Safari 18.2 release notes via engineered.at; words.filippo.io on Plex; tailscale.com/docs/how-to/set-up-https-certificates.
