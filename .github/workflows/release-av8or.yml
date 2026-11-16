@@ -72,18 +72,15 @@ jobs:
           # Fast-forward only; if main moved meanwhile, the next push retries.
           git push origin HEAD:refs/heads/main
           git push origin "refs/tags/$VERSION"
-          {
-            echo "av8or edition release. Changes in this repo since \`$PREVIOUS\`:"
-            echo
-            prev_tag="$(git tag -l "$PREVIOUS" | head -1)"
-            if [ -n "$prev_tag" ]; then
-              git log --no-merges --format='* %s' "$prev_tag..HEAD^" | grep -v '^\* Release ' | head -40
-            else
-              git log --no-merges --format='* %s' -20 "HEAD^"
-            fi
-            echo
-            echo "Based on [FlightScnr Pi](https://github.com/yashmulgaonkar/FlightScnr_Pi) by Yash Mulgaonkar (CC BY-NC-SA 4.0), with changes."
-          } > notes.md
+          # The device shows only the "What's Changed" section of this body;
+          # release-notes.py puts the changes there and the credit after it.
+          prev_tag="$(git tag -l "$PREVIOUS" | head -1)"
+          if [ -n "$prev_tag" ]; then
+            git log --no-merges --format='%s' "$prev_tag..HEAD^" > subjects.txt
+          else
+            git log --no-merges --format='%s' -20 "HEAD^" > subjects.txt
+          fi
+          python3 .github/scripts/release-notes.py av8or < subjects.txt > notes.md
           gh release create "$VERSION" --target "$(git rev-parse HEAD)" \
             --title "av8or $VERSION" --notes-file notes.md --latest
           echo "### Released av8or $VERSION" >> "$GITHUB_STEP_SUMMARY"

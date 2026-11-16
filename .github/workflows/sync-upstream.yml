@@ -157,14 +157,10 @@ jobs:
 
           if [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){3}$ ]] \
              && ! git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1; then
-            {
-              echo "Synced from [yashmulgaonkar/FlightScnr_Pi](https://github.com/yashmulgaonkar/FlightScnr_Pi) (CC BY-NC-SA 4.0), with av8or customizations."
-              echo
-              (git log --no-merges --format='* %s' "$RANGE_BASE..$UPSTREAM_SHA" || true) | head -60
-              if [ -n "$HELD_BACK" ]; then
-                echo; echo "Upstream workflow changes not applied: $HELD_BACK"
-              fi
-            } > notes.md
+            # Carry upstream's changes into the notes the device shows: it
+            # reads only the "What's Changed" section (see release-notes.py).
+            (git log --no-merges --format='%s' "$RANGE_BASE..$UPSTREAM_SHA" || true) > subjects.txt
+            python3 .github/scripts/release-notes.py upstream --held-back "$HELD_BACK" < subjects.txt > notes.md
             gh release create "$VERSION" --target "$SHA" --title "FlightScnr Pi $VERSION" --notes-file notes.md --latest
           else
             echo "No new release tag for VERSION='$VERSION' (unchanged or malformed)."

@@ -365,3 +365,12 @@ tests/test_open_meteo_weather.py: 9 tests pass in the evening (21:00 ET on 2026-
 local-date versus UTC-date boundary in the forecast day pruning or the fixture's dates; needs a frozen clock in the
 test. Not related to any display work.
 DONE: efb0589 pins the weather tests to the fixture's timezone (upstream PR 280, merged 2026-11-09).
+
+## Update notes on the device (fixed 2026-11-16)
+
+The device and portal show only the "## What's Changed" section of a release body
+(utilities/updater.extract_whats_changed), else the first paragraph. Our release bodies opened with a credit line,
+so a synced upstream release showed only "Synced from ..." and our own releases only "av8or edition release ...".
+DONE: .github/scripts/release-notes.py writes both bodies (changes under What's Changed, credit under About, PR
+numbers and at-mentions stripped); release-av8or.yml and sync-upstream.yml call it; tests/test_release_notes.py
+checks the output through the device parser. Releases published before this keep their old bodies unless edited.
