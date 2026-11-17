@@ -422,7 +422,7 @@ and only the radar fast path changed: gpu_present.py draws base layer (GPU-rotat
 trail tips, rim, sweep wedge, HUD texture and one overlay texture for bubbles, tiles and menus, from scratch every
 frame. Chosen in the portal (Radar, Renderer) or FLIGHTSCNR_RENDERER; needs an app relaunch. Runtime flag for
 features: gpu.active(). Classic radar uses it for a continuous paint fade (radar_classic.glow_brightness).
-Fallback to CPU: no renderer, start-up check slower than 22 ms a frame, last GPU start did not finish
+Fallback to CPU: no renderer, start-up fill check over 2.5 ms per layer (see below), last GPU start did not finish
 (gpu_state.json "starting" found at boot), or a radar frame raising mid-run. A failed state is sticky until the
 setting is saved again (CPU, save, GPU, save) or the env var forces it.
 Probe on the Pi 4 (X11 kiosk, v3d): render drivers opengl, opengles2, software; 150 alpha sprites plus base plus
@@ -451,18 +451,32 @@ smooth is the per-frame live icon work on the CPU (4L_live_frame 4.3 to 5.3 ms a
 60 times a second; the GPU draw itself is 1.3 to 1.9 ms. So smooth reaches 60 fps in light traffic but with about
 20 points more CPU than classic and more slow frames; at busy-hour traffic it may not hold 60. Not measured there.
 Pi left in smooth motion on the GPU renderer for Matt to look at.
-Upstream: branch feat/gpu-renderer on the fork, rebuilt 2026-11-16 as GPU only (757e539, one commit on upstream
-main 3544836, 16 files, no classic code, no BACKLOG.md; upstream suite 2465 passing). Matt's decision: the GPU PR
+Upstream: branch feat/gpu-renderer on the fork, rebuilt 2026-11-16 as GPU only (757e539 plus the start-up check fix, two commits on upstream
+main 3544836, 16 files, no classic code, no BACKLOG.md; upstream suite 2466 passing). Matt's decision: the GPU PR
 adds the mode alone, independent of the classic radar PR (upstream #295). FOLLOW-UP PR, only if #295 is accepted
 and after both merge: classic on the GPU, which is the held-target drawing in gpu_present (held, held_alpha
 parameters), radar._fade / live_held_alpha / the dimmed copy in draw_live_icons, radar_classic.glow_brightness,
 rotation.shown_layer_gen on the GPU path, and the TestHeldAlpha, TestGlowCurve and TestFadeFollowsTheRenderer
 tests. All of that is in av8or main already. Whichever of the two PRs merges second needs a small rebase in
-rotation.present_radar_sweep. The GPU-only branch itself was not run on the Pi; the same paths ran there in
-smooth motion from av8or main.
+rotation.present_radar_sweep.
 Panel check in GPU mode 2026-11-16 by injected taps: airport METAR tile opens and clears, flight detail opens and
 the return to the radar redraws, no GPU fallback logged. Radial menu, lofi pill and update bubble still untested
 on the panel. Start-up check now takes the best of 12 frames (release 2026.11.17.14).
+DEVICE TEST of the exact fork branch, 2026-11-16 (cloned to its own folder on the Pi, run as a transient systemd
+unit mirroring flightscnr.service, av8or service stopped meanwhile, settings and env restored after):
+GPU start, radar at 59.2 fps (interval p95 18.1 ms, 1.0 frames over 66 ms a minute) with upstream smooth motion;
+58.9 fps with smooth motion off; CPU chosen 29.5 fps on the untouched path with no GPU log lines; airport tile,
+radial menu and zoom control drawn correctly in GPU mode; portal /radar/json reports renderer and state; portal
+POST cpu then gpu clears a failed state; kill -9 seven seconds into a start gives "the last GPU start did not
+finish" and CPU on the next start; a clean stop at the same point does not count as a failure;
+FLIGHTSCNR_RENDERER=gpu retries past a failed state and =cpu wins over the setting.
+FOUND AND FIXED by that test: with LIBGL_ALWAYS_SOFTWARE=1 (Mesa llvmpipe) the old frame-time start-up check
+passed (27.5 ms against a 40 ms limit, and the earlier 22 ms limit had only 4 ms of margin over a real GPU at
+17.9 ms because vsync quantises the number), and the radar then ran at 32 fps with a 26 ms present, worse than
+CPU. SDL_RENDER_DRIVER=software does not force this case: pygame.SCALED picks the driver itself. The check now
+times one more full-window blended layer with no present (one-pixel readback to finish the frame): 0.58 ms on
+v3d in six starts, 5.1 ms on llvmpipe, limit 2.5 ms; under four busy loops the GPU figure stayed under 1 ms.
+Still not tested on a device: a radar frame failing mid-run (unit test only), other Pi models.
 Ideas the flag now allows: longer beam afterglow, a paint flash as
 the beam crosses a target, per-frame motion for every target, base upload split into bands.
 Unrelated, seen 2026-11-16 in a fresh venv: tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart
