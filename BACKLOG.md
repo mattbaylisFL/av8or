@@ -415,6 +415,29 @@ base as a texture, targets as textures with per-draw alpha, beam as geometry. (3
 automatic fallback when no accelerated renderer is found. (4) Same interleaved A/B method as the classic work.
 Things a GPU path would unlock: continuous paint fade and beam afterglow, per-frame motion for all targets without
 the live icon budget, smoother map pan and zoom.
+SHIPPED 2026-11-16 (releases 2026.11.16.28 and .29, tests/test_gpu_renderer.py): GPU renderer, opt-in, CPU default.
+How it works: gpu.py opens the window with pygame.SCALED (which gives it an SDL renderer) and shares that renderer
+with pygame._sdl2, so every screen still draws to the display surface (flip uploads it as one texture, about 5 ms)
+and only the radar fast path changed: gpu_present.py draws base layer (GPU-rotated), sprites with per-draw alpha,
+trail tips, rim, sweep wedge, HUD texture and one overlay texture for bubbles, tiles and menus, from scratch every
+frame. Chosen in the portal (Radar, Renderer) or FLIGHTSCNR_RENDERER; needs an app relaunch. Runtime flag for
+features: gpu.active(). Classic radar uses it for a continuous paint fade (radar_classic.glow_brightness).
+Fallback to CPU: no renderer, start-up check slower than 22 ms a frame, last GPU start did not finish
+(gpu_state.json "starting" found at boot), or a radar frame raising mid-run. A failed state is sticky until the
+setting is saved again (CPU, save, GPU, save) or the env var forces it.
+Probe on the Pi 4 (X11 kiosk, v3d): render drivers opengl, opengles2, software; 150 alpha sprites plus base plus
+rotated beam in about 6 ms accelerated against 33 ms software; vsync locks 60 fps.
+A/B on the Pi, same hour, classic motion, 29 to 39 targets, 180 s per arm after 150 s warm-up, interleaved:
+frames over 66 ms per minute 1.7 and 0.3 on GPU against 8.0 and 2.7 on CPU; over 99 ms 0.3 and 0.0 against 1.0
+and 0.3; present stage 3.8 ms against 10.8 to 11.6 ms; whole draw 5.4 ms against 12.2 to 13.3 ms. Light evening
+traffic, so the busy-hour comparison (60 plus targets) is still to do.
+Not done or not verified: (1) only the Pi 4 was tested, no Pi 3, Pi 5 or Zero 2; (2) the start-up check ran at
+9.7 and 14.1 ms with vsync on, against a 22 ms limit, so a slow boot could trip the fallback by mistake; (3) the
+overlay tiles, radial menu, lofi pill and update bubble were not exercised on the panel in GPU mode, only in
+tests with stand-ins; (4) the layer rebuild still runs on the CPU and still causes most remaining slow frames;
+(5) frames composed on the CPU (pan, menus) use the nearest stepped fade, so brightness can step when a pan starts.
+Ideas the flag now allows: 60 fps radar on GPU (draw averages 5.4 ms), longer beam afterglow, a paint flash as
+the beam crosses a target, per-frame motion for every target, base upload split into bands.
 Unrelated, seen 2026-11-16 in a fresh venv: tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart
 fails on its own on main (a pixel outside the chart differs); not from this work.
 
