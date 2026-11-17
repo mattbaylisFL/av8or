@@ -436,7 +436,13 @@ Not done or not verified: (1) only the Pi 4 was tested, no Pi 3, Pi 5 or Zero 2;
 overlay tiles, radial menu, lofi pill and update bubble were not exercised on the panel in GPU mode, only in
 tests with stand-ins; (4) the layer rebuild still runs on the CPU and still causes most remaining slow frames;
 (5) frames composed on the CPU (pan, menus) use the nearest stepped fade, so brightness can step when a pan starts.
-Ideas the flag now allows: 60 fps radar on GPU (draw averages 5.4 ms), longer beam afterglow, a paint flash as
+DONE 2026-11-16 (release after 2026.11.17.11): the radar runs at 60 fps on the GPU renderer (FLIGHTSCNR_GPU_FPS,
+30 to 60, default 60; the CPU renderer stays at 30). A/B on the Pi 4, GPU mode, classic, 29 to 36 targets,
+interleaved 60/30/60/30: 59.3 and 59.4 fps against 29.6; interval p95 18.3 ms against 40.4 to 40.7 ms (30 fps
+under vsync alternates 33 and 50 ms frames, so 60 is also the more even of the two); frames over 66 ms per minute
+0.3 and 1.0 against 0.3 and 0.6; process CPU 45 to 50 percent of a core against 39; SoC 50 C against 48 C.
+About one 2 s window in five at 60 fps had a skipped refresh. Not measured at busy-hour traffic.
+Ideas the flag now allows: longer beam afterglow, a paint flash as
 the beam crosses a target, per-frame motion for every target, base upload split into bands.
 Unrelated, seen 2026-11-16 in a fresh venv: tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart
 fails on its own on main (a pixel outside the chart differs); not from this work.

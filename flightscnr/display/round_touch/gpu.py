@@ -136,14 +136,14 @@ def _vsync() -> bool:
 
 def _fps() -> int:
     try:
-        return max(30, min(60, int(os.environ.get("FLIGHTSCNR_GPU_FPS", "30"))))
+        return max(30, min(60, int(os.environ.get("FLIGHTSCNR_GPU_FPS", "60"))))
     except ValueError:
-        return 30
+        return 60
 
 
 def radar_frame_ms(default_ms: float) -> float:
     """Milliseconds between radar frames: ``default_ms`` unless the GPU renderer
-    is active and FLIGHTSCNR_GPU_FPS asks for more than 30.
+    is active, where the radar runs at FLIGHTSCNR_GPU_FPS (60 by default, 30 to 60).
 
     With vsync on, the present call waits for the refresh, so the gate is set
     a little short of the frame time: a frame that is due just before a

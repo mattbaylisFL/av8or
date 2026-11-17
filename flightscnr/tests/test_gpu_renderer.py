@@ -455,3 +455,32 @@ class TestPortalControl:
 
     def test_settings_and_gpu_agree_on_the_choices(self):
         assert settings.RENDERERS == gpu.RENDERERS
+
+
+class TestRadarFrameRate:
+    def test_cpu_renderer_keeps_its_frame_time(self, monkeypatch):
+        monkeypatch.setattr(gpu, "_active", False)
+        monkeypatch.setenv("FLIGHTSCNR_GPU_FPS", "60")
+        assert gpu.radar_frame_ms(33) == 33
+
+    def test_gpu_renderer_runs_at_60_by_default(self, monkeypatch):
+        monkeypatch.setattr(gpu, "_active", True)
+        monkeypatch.delenv("FLIGHTSCNR_GPU_FPS", raising=False)
+        monkeypatch.setenv("FLIGHTSCNR_GPU_VSYNC", "0")
+        assert gpu.radar_frame_ms(33) == pytest.approx(1000.0 / 60)
+
+    def test_gate_is_short_of_the_refresh_with_vsync(self, monkeypatch):
+        monkeypatch.setattr(gpu, "_active", True)
+        monkeypatch.delenv("FLIGHTSCNR_GPU_FPS", raising=False)
+        monkeypatch.setenv("FLIGHTSCNR_GPU_VSYNC", "1")
+        assert gpu.radar_frame_ms(33) < 1000.0 / 60
+
+    def test_can_be_held_at_30_and_bad_values_are_clamped(self, monkeypatch):
+        monkeypatch.setattr(gpu, "_active", True)
+        monkeypatch.setenv("FLIGHTSCNR_GPU_FPS", "30")
+        assert gpu.radar_frame_ms(33) == 33
+        monkeypatch.setenv("FLIGHTSCNR_GPU_FPS", "240")
+        monkeypatch.setenv("FLIGHTSCNR_GPU_VSYNC", "0")
+        assert gpu.radar_frame_ms(33) == pytest.approx(1000.0 / 60)
+        monkeypatch.setenv("FLIGHTSCNR_GPU_FPS", "fast")
+        assert gpu.radar_frame_ms(33) == pytest.approx(1000.0 / 60)
