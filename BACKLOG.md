@@ -481,6 +481,17 @@ Ideas the flag now allows: longer beam afterglow, a paint flash as
 the beam crosses a target, per-frame motion for every target, base upload split into bands.
 Unrelated, seen 2026-11-16 in a fresh venv: tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart
 fails on its own on main (a pixel outside the chart differs); not from this work.
+Upstream branch updated 2026-11-17 (fork feat/gpu-renderer at bde88d5, normal push): upstream merged Classic radar
+(#295) and the basemap re-download (#296), so the branch conflicted and, worse, would have drawn no Classic targets
+in GPU mode (the GPU path ignored the held list). Merged upstream main ef51428 in and added one commit: gpu_present
+draws the held targets exactly as radar.py prepares them (CPU stepped fade), rotation.shown_layer_gen answers on the
+GPU path. Matt's decision stands: no continuous fade in this PR. The follow-up PR is now only radar._fade,
+live_held_alpha, held_alpha plumbing, radar_classic.glow_brightness, the hint text and three test classes. Device
+run of bde88d5 on the Pi 4: smooth 60 fps (interval p95 17.3 ms), Classic 59 to 60 fps (p95 17.6 to 18.0 ms, no
+frames over 66 ms in four windows), held targets on screen with the stepped fade. Upstream suite on the branch:
+2620 passing plus tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart, which is flaky
+on plain upstream main as well (failed 9 of 12 runs there; not from this work, worth a look or an upstream issue).
+av8or does not have upstream #296 (basemap re-download) yet: pick it up at the next upstream sync.
 
 ## Log noise (noticed 2026-11-04)
 
