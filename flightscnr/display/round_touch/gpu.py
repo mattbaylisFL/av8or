@@ -172,7 +172,9 @@ def _self_test(ren) -> float:
     if width <= 0 or height <= 0:
         width, height = 720, 720
     best = None
-    for frame in range(6):
+    # Best of several: with vsync on, each frame waits for a refresh, and one
+    # slow frame while the system is still booting must not fail the check.
+    for frame in range(12):
         started = time.perf_counter()
         ren.draw_color = (0, 0, 0, 255)
         ren.clear()
