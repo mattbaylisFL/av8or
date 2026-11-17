@@ -451,9 +451,15 @@ smooth is the per-frame live icon work on the CPU (4L_live_frame 4.3 to 5.3 ms a
 60 times a second; the GPU draw itself is 1.3 to 1.9 ms. So smooth reaches 60 fps in light traffic but with about
 20 points more CPU than classic and more slow frames; at busy-hour traffic it may not hold 60. Not measured there.
 Pi left in smooth motion on the GPU renderer for Matt to look at.
-Upstream: branch feat/gpu-renderer on the fork (8f3ec6f, one commit on top of feat/classic-radar 557cc01, 18
-files, no BACKLOG.md; upstream suite 2596 passing). It depends on the classic radar PR (upstream #295, open on
-2026-11-16), so its diff against upstream main includes classic until that merges; rebase onto upstream main then.
+Upstream: branch feat/gpu-renderer on the fork, rebuilt 2026-11-16 as GPU only (757e539, one commit on upstream
+main 3544836, 16 files, no classic code, no BACKLOG.md; upstream suite 2465 passing). Matt's decision: the GPU PR
+adds the mode alone, independent of the classic radar PR (upstream #295). FOLLOW-UP PR, only if #295 is accepted
+and after both merge: classic on the GPU, which is the held-target drawing in gpu_present (held, held_alpha
+parameters), radar._fade / live_held_alpha / the dimmed copy in draw_live_icons, radar_classic.glow_brightness,
+rotation.shown_layer_gen on the GPU path, and the TestHeldAlpha, TestGlowCurve and TestFadeFollowsTheRenderer
+tests. All of that is in av8or main already. Whichever of the two PRs merges second needs a small rebase in
+rotation.present_radar_sweep. The GPU-only branch itself was not run on the Pi; the same paths ran there in
+smooth motion from av8or main.
 Panel check in GPU mode 2026-11-16 by injected taps: airport METAR tile opens and clears, flight detail opens and
 the return to the radar redraws, no GPU fallback logged. Radial menu, lofi pill and update bubble still untested
 on the panel. Start-up check now takes the best of 12 frames (release 2026.11.17.14).
