@@ -492,6 +492,11 @@ frames over 66 ms in four windows), held targets on screen with the stepped fade
 2620 passing plus tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart, which is flaky
 on plain upstream main as well (failed 9 of 12 runs there; not from this work, worth a look or an upstream issue).
 av8or does not have upstream #296 (basemap re-download) yet: pick it up at the next upstream sync.
+Follow-up PR queued 2026-11-17: fork branch feat/classic-gpu-fade at c525204, one commit on top of
+feat/gpu-renderer bde88d5 (stacked, 13 files). Suite 2627 passing bar the flaky ISS test. Device run on the Pi 4,
+Classic radar on the GPU renderer, 41 targets: 59 to 60 fps, interval p95 17.1 to 18.0 ms, no frames over 66 ms in
+four windows, continuous fade visible. Open it only after the GPU PR merges; if upstream squash-merges that PR,
+rebase this branch onto upstream main first (needs a force push of feat/classic-gpu-fade: ask Matt).
 
 ## Log noise (noticed 2026-11-04)
 
