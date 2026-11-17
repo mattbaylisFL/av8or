@@ -491,6 +491,14 @@ run of bde88d5 on the Pi 4: smooth 60 fps (interval p95 17.3 ms), Classic 59 to 
 frames over 66 ms in four windows), held targets on screen with the stepped fade. Upstream suite on the branch:
 2620 passing plus tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart, which is flaky
 on plain upstream main as well (failed 9 of 12 runs there; not from this work, worth a look or an upstream issue).
+IN PROGRESS 2026-11-17 (started 07:33 ET, ends about 20:15 ET): all-day profile of Classic radar on the GPU
+renderer against traffic density, for the GPU PR text. The Pi is in Classic radar with FLIGHTSCNR_FRAME_DEBUG=1 from
+a systemd drop-in (/etc/systemd/system/flightscnr.service.d/zz-gpu-day-profile.conf; /etc/flightscnr.env untouched).
+Everything is in /home/admin/gpu-day on the Pi: analyze.py UNIT SINCE [UNTIL] bins the [frame] journal lines by
+targets_drawn, samples.log has temp and display CPU every 5 min, spot.sh runs the pure upstream branch (clone at
+/home/admin/gpu-branch-test) for 8 min and logs the window to spots.log, restore.sh puts back the saved settings
+(Smooth, GPU), removes the drop-in and restarts. If the session that scheduled the check-ins is gone: run
+analyze.py for the day and each spot window, run restore.sh, delete both folders, add the findings to the PR text.
 av8or does not have upstream #296 (basemap re-download) yet: pick it up at the next upstream sync.
 Follow-up PR queued 2026-11-17: fork branch feat/classic-gpu-fade at c525204, one commit on top of
 feat/gpu-renderer bde88d5 (stacked, 13 files). Suite 2627 passing bar the flaky ISS test. Device run on the Pi 4,
