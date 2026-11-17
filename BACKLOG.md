@@ -506,6 +506,63 @@ Classic radar on the GPU renderer, 41 targets: 59 to 60 fps, interval p95 17.1 t
 four windows, continuous fade visible. Open it only after the GPU PR merges; if upstream squash-merges that PR,
 rebase this branch onto upstream main first (needs a force push of feat/classic-gpu-fade: ask Matt).
 
+Profile note 2026-11-17 13:30 ET: from 07:33 to 13:19 the "update available" bubble was on screen (the Pi was three
+releases behind), and it alone cost 8.1 ms a frame (see the next section). Numbers from that span (57.5 fps, 97
+percent of a core, flat across 33 to 108 targets) are "Classic on the GPU with an overlay up", not the clean case.
+The Pi was updated and restarted at 13:19 and is bubble-free since; use `analyze.py flightscnr '2026-11-17 13:35:00'`
+for the clean figures (Smooth was profiled 13:25 to 13:29, then back to Classic). Every push to origin main brings
+the bubble back until the Pi pulls: after pushing, `git pull --ff-only` in the Pi checkout and restart flightscnr.
+The 11:07 spot check of the pure branch ran 11:07:22 to 11:15:03 (spots.log); the later check-ins were cancelled.
+
+## Next GPU candidates: CPU drawing worth moving (profiled 2026-11-17, Pi 4B, GPU renderer, 39 to 47 targets)
+
+Queued behind the Classic fade PR. Method: [frame] stage timings for the day, py-spy 0.4.3 at 250 Hz on the live
+process (90 to 120 s each: Classic with the update bubble, Classic without, Smooth), `top -H` for the main thread.
+py-spy lives in /home/admin/prof on the Pi (venv `v`, raw stacks *.raw, summ.py, jit.py): delete it at wrap-up.
+
+Baseline with nothing extra on screen: Classic 59.3 fps at 41 percent of one core, Smooth 58.7 fps at 68 percent.
+`4g_present` is mostly the vsync wait, so "draw avg 14 ms" is not 14 ms of work. Ranked by measured effect:
+
+1. Trails in the 4 s layer rebuild. The rebuild takes 300 to 360 ms on a worker thread and trails are 260 to 300 ms
+   of it (about 735 lines and 190 dots through pygame.draw, plus 60 deliberate 2 ms sleeps to release the GIL). It
+   is the main pacing fault left. Smooth: 2 s windows with a rebuild run 57.7 fps, median worst frame 60.6 ms, 9.3
+   frames over 66 ms a minute; windows without run 59.6 fps, 23.4 ms, none. Classic: 59.1 against 59.5 fps, worst
+   frame 35.4 against 21.1 ms. GPU version: draw the trail segments into a render-target texture on the main
+   thread, a budgeted slice per frame, and composite it over the base. pygame 2.6.1's Renderer has no geometry call
+   and draw_line is 1 px, so segments are a stretched 1x1 texture as `gpu_present._draw_line` does today. Not
+   measured: per-segment draw cost at this volume (held sprites cost about 20 us each, so a full redraw is perhaps
+   15 to 20 ms, hence the slicing). Spike that first.
+2. Overlays (update bubble, airport callout, location toast, lo-fi controls and tile, airport tile, favourite tile,
+   radial menu; rotation.py `_blit_*`). Each one, every frame it is visible: allocates a 1080x1080 alpha surface,
+   redraws itself, rotates the whole surface, then the GPU path re-uploads the rect. Measured with the update
+   bubble: `4g_overlay` 0.2 ms to 8.1 ms a frame, main thread 41 to 97 percent, 59.3 to 57.5 fps (55.2 in rebuild
+   windows), 42 percent of main-thread samples under `_draw_overlays` (21 percent in the full-surface rotate alone).
+   The bubble also reads its notify JSON every frame. Only the bubble was measured; the other seven share the code
+   shape. GPU version: one retained texture per overlay keyed on its content, drawn with the GPU's angle. The same
+   key lets the CPU path cache the rotated copy, so this one speeds up both.
+3. Smooth targets. `4L_live_frame` is 5.5 ms a frame in Smooth against 1.5 in Classic. About 16 percent of samples
+   are the quarter-pixel sprite variants (`_subpixel_variant`, 16 per sprite) and uploading each as its own texture
+   (`gpu_present._texture`); about 4.5 percent is `_clip_to_display` cutting sprites at the round edge with a mask.
+   The GPU places a texture at a fractional position itself, so on that path: one texture per sprite, float
+   destination, and one bezel mask texture drawn last in place of per-sprite clipping. Check on the device that
+   linear filtering looks as good as the current variants before removing them from the GPU path.
+4. Full-frame screens (everything that is not the radar fast path). Still CPU rotate then flip: `4a_rotate` 5.6 ms
+   and `4b_flip` 7.3 ms, but from 11 windows of the disclaimer screen only. Measure the clock, detail and info
+   screens before queuing it. GPU version: upload the logical frame and let the GPU rotate it.
+
+Not worth moving yet: tags 16 to 43 ms, rim 7 to 14 ms and bezel 4 to 9 ms per rebuild, all off the main thread.
+CPU fix found on the way, not a GPU item: `_tick_wifi_link` calls `wifi_setup.auto_hotspot_enabled()` every frame,
+which opens and parses round_touch_settings.json each time (3.4 to 4 percent of samples). Cache it on the mtime.
+
+Shape to build these on, so each feature is written once: a draw list. Screens describe what to draw as items and
+a backend carries them out, the split `present_radar_sweep(held=, live_icons=, live_connectors=, live_rim=)`
+already has between rotation.py (CPU) and gpu_present.py (GPU). Item kinds: Layer (a surface, a content key and a
+build function: base map, HUD, each overlay, the trail layer), Sprite (surface, float centre, alpha), Segment
+(two points, colour, alpha, width). The CPU backend builds a Layer once per key, rotates it once and blits it, and
+blits sprites and lines as now; the GPU backend uploads once per key and lets the GPU rotate, fade and place. The
+build functions stay plain pygame drawing shared by both, and a backend that fails mid-frame falls back to the CPU
+backend with the same list. Order: item 2 first (smallest, proves Layer on both backends), then 3, then 1.
+
 ## Log noise (noticed 2026-11-04)
 
 DONE 2026-11-06 (release 2026.11.7.10, tests/test_log_latches.py): "ATC resuming", "ATC deferred" and the
