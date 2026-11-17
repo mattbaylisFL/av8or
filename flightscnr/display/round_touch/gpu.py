@@ -134,6 +134,30 @@ def _vsync() -> bool:
     )
 
 
+def _fps() -> int:
+    try:
+        return max(30, min(60, int(os.environ.get("FLIGHTSCNR_GPU_FPS", "30"))))
+    except ValueError:
+        return 30
+
+
+def radar_frame_ms(default_ms: float) -> float:
+    """Milliseconds between radar frames: ``default_ms`` unless the GPU renderer
+    is active and FLIGHTSCNR_GPU_FPS asks for more than 30.
+
+    With vsync on, the present call waits for the refresh, so the gate is set
+    a little short of the frame time: a frame that is due just before a
+    refresh must not wait for the one after.
+    """
+    if not _active:
+        return default_ms
+    fps = _fps()
+    if fps <= 30:
+        return default_ms
+    frame = 1000.0 / fps
+    return frame - 2.0 if _vsync() else frame
+
+
 def _self_test(ren) -> float:
     """Best frame time (ms) of a small alpha-sprite scene on ``ren``."""
     import pygame
