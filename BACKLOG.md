@@ -442,6 +442,15 @@ interleaved 60/30/60/30: 59.3 and 59.4 fps against 29.6; interval p95 18.3 ms ag
 under vsync alternates 33 and 50 ms frames, so 60 is also the more even of the two); frames over 66 ms per minute
 0.3 and 1.0 against 0.3 and 0.6; process CPU 45 to 50 percent of a core against 39; SoC 50 C against 48 C.
 About one 2 s window in five at 60 fps had a skipped refresh. Not measured at busy-hour traffic.
+Smooth motion at 60 fps on the GPU renderer, measured 2026-11-16 on the Pi 4 (release 2026.11.17.12, 28 to 32
+targets, interleaved smooth/classic/smooth/classic, 185 s per arm, mode switched through the settings file with
+no restart): smooth held 59.2 and 58.9 fps (classic 59.3 and 59.4); interval p95 18.2 and 18.6 ms (classic 18.3);
+frames over 66 ms per minute 1.6 and 5.2 (classic 1.0 and 0.0); over 99 ms 0.0 and 0.3 (classic 0.3 and 0.0);
+process CPU 62 to 72 percent of a core (classic 46 to 48); SoC 50 to 51 C (classic 49 to 51 C). The extra cost in
+smooth is the per-frame live icon work on the CPU (4L_live_frame 4.3 to 5.3 ms a frame against 1.4 ms), now paid
+60 times a second; the GPU draw itself is 1.3 to 1.9 ms. So smooth reaches 60 fps in light traffic but with about
+20 points more CPU than classic and more slow frames; at busy-hour traffic it may not hold 60. Not measured there.
+Pi left in smooth motion on the GPU renderer for Matt to look at.
 Ideas the flag now allows: longer beam afterglow, a paint flash as
 the beam crosses a target, per-frame motion for every target, base upload split into bands.
 Unrelated, seen 2026-11-16 in a fresh venv: tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart
