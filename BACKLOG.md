@@ -491,14 +491,18 @@ run of bde88d5 on the Pi 4: smooth 60 fps (interval p95 17.3 ms), Classic 59 to 
 frames over 66 ms in four windows), held targets on screen with the stepped fade. Upstream suite on the branch:
 2620 passing plus tests/test_iss.py::TestDraw::test_flown_track_has_a_soft_glow_inside_the_chart, which is flaky
 on plain upstream main as well (failed 9 of 12 runs there; not from this work, worth a look or an upstream issue).
-IN PROGRESS 2026-11-17 (started 07:33 ET, ends about 20:15 ET): all-day profile of Classic radar on the GPU
-renderer against traffic density, for the GPU PR text. The Pi is in Classic radar with FLIGHTSCNR_FRAME_DEBUG=1 from
-a systemd drop-in (/etc/systemd/system/flightscnr.service.d/zz-gpu-day-profile.conf; /etc/flightscnr.env untouched).
-Everything is in /home/admin/gpu-day on the Pi: analyze.py UNIT SINCE [UNTIL] bins the [frame] journal lines by
-targets_drawn, samples.log has temp and display CPU every 5 min, spot.sh runs the pure upstream branch (clone at
-/home/admin/gpu-branch-test) for 8 min and logs the window to spots.log, restore.sh puts back the saved settings
-(Smooth, GPU), removes the drop-in and restarts. If the session that scheduled the check-ins is gone: run
-analyze.py for the day and each spot window, run restore.sh, delete both folders, add the findings to the PR text.
+DONE 2026-11-17: all-day profile of Classic radar on the GPU renderer against traffic density (Pi 4B, av8or build
+with the continuous fade, FLIGHTSCNR_FRAME_DEBUG=1 from a temporary drop-in, 2 s windows binned by targets drawn).
+Clean span 13:30 to 20:17 ET, 404 minutes, 28 to 138 targets, 59.1 fps overall, 95 percent of windows at 57 fps or
+more, interval p95 17.7 ms, GPU draw 0.8 to 1.8 ms. Per band (minutes, fps, frames over 66 ms a minute): 20-29: 3,
+59.3, 0.32. 30-39: 118, 59.3, 0.35. 40-49: 70, 59.2, 0.26. 50-59: 138, 59.0, 0.62. 60-79: 74, 58.9, 1.07. 80+: 2,
+58.8, 1.43. Display CPU 52 percent of a core on average (max 73), 49 C average (max 52.6).
+Overlay-up span 07:33 to 13:19 (update bubble on screen, 326 minutes, 33 to 132 targets): 57.3 fps overall, 58.0 at
+30-39 targets down to 55.8 at 60-79, 2.05 frames over 66 ms a minute, display CPU 97.5 percent, 52.7 C.
+Pure feat/gpu-renderer branch (stepped fade), one spot check 11:07 to 11:15: 5.1 minutes at 41 to 49 targets, 58.9
+fps, interval p95 17.9 ms, 1.17 frames over 66 ms a minute. The 15:07 and 18:07 spot checks were cancelled, so the
+pure branch has no reading above 49 targets. Pi restored 20:19 (Smooth, GPU, drop-in removed, env file matches the
+backup) and /home/admin/gpu-day, gpu-branch-test and prof deleted.
 av8or does not have upstream #296 (basemap re-download) yet: pick it up at the next upstream sync.
 Follow-up PR queued 2026-11-17: fork branch feat/classic-gpu-fade at c525204, one commit on top of
 feat/gpu-renderer bde88d5 (stacked, 13 files). Suite 2627 passing bar the flaky ISS test. Device run on the Pi 4,
@@ -518,7 +522,7 @@ The 11:07 spot check of the pure branch ran 11:07:22 to 11:15:03 (spots.log); th
 
 Queued behind the Classic fade PR. Method: [frame] stage timings for the day, py-spy 0.4.3 at 250 Hz on the live
 process (90 to 120 s each: Classic with the update bubble, Classic without, Smooth), `top -H` for the main thread.
-py-spy lives in /home/admin/prof on the Pi (venv `v`, raw stacks *.raw, summ.py, jit.py): delete it at wrap-up.
+The py-spy venv and raw stacks on the Pi were deleted at wrap-up (pip install py-spy in a throwaway venv to redo).
 
 Baseline with nothing extra on screen: Classic 59.3 fps at 41 percent of one core, Smooth 58.7 fps at 68 percent.
 `4g_present` is mostly the vsync wait, so "draw avg 14 ms" is not 14 ms of work. Ranked by measured effect:
