@@ -503,7 +503,10 @@ Pure feat/gpu-renderer branch (stepped fade), one spot check 11:07 to 11:15: 5.1
 fps, interval p95 17.9 ms, 1.17 frames over 66 ms a minute. The 15:07 and 18:07 spot checks were cancelled, so the
 pure branch has no reading above 49 targets. Pi restored 20:19 (Smooth, GPU, drop-in removed, env file matches the
 backup) and /home/admin/gpu-day, gpu-branch-test and prof deleted.
-av8or does not have upstream #296 (basemap re-download) yet: pick it up at the next upstream sync.
+DONE 2026-11-18: upstream 2026.11.16.2 merged by hand (sync issue 11: 14 files conflicted because upstream took the
+Classic radar #295 while av8or carries it with the GPU fade on top). Every Classic hunk kept this side; #296 and the
+PICO icon mapping came in unchanged. The same conflict will recur when upstream merges the GPU renderer PR and the
+fade follow-up: resolve the same way (keep this side, check the diff against HEAD is only upstream's other changes).
 Follow-up PR queued 2026-11-17: fork branch feat/classic-gpu-fade at c525204, one commit on top of
 feat/gpu-renderer bde88d5 (stacked, 13 files). Suite 2627 passing bar the flaky ISS test. Device run on the Pi 4,
 Classic radar on the GPU renderer, 41 targets: 59 to 60 fps, interval p95 17.1 to 18.0 ms, no frames over 66 ms in
