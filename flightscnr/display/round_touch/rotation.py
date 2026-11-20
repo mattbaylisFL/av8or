@@ -235,7 +235,6 @@ def present_radar_sweep(
     held: list | None = None,
     held_for_gen=None,
     held_alpha: dict | None = None,
-    trail_ops_for=None,
 ) -> None:
     """Blit a cached rotated radar base, then optionally draw the sweep.
 
@@ -254,15 +253,13 @@ def present_radar_sweep(
     not shown yet (see radar.live_held_frame_for).
 
     On the GPU renderer the frame is drawn by ``gpu_present`` instead;
-    ``held_alpha`` is its per-target brightness (radar.live_held_alpha) and
-    ``trail_ops_for(layer_gen)`` the trails it draws itself for that layer
-    (radar.trail_ops_for). The CPU path needs neither: its trails are baked.
+    ``held_alpha`` is its per-target brightness (radar.live_held_alpha).
     """
     if gpu.active() and _present_gpu(
         display, base_layer, layer_gen, sweep_angle_logical, sweep_color,
         draw_sweep=draw_sweep, live_icons=live_icons,
         live_connectors=live_connectors, live_rim=live_rim,
-        held=held, held_alpha=held_alpha, trail_ops_for=trail_ops_for,
+        held=held, held_alpha=held_alpha,
     ):
         return
     global _rot_base, _rot_base_key, _prev_sweep_rect, _pending_key, _needs_full

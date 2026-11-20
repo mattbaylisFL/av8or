@@ -55,17 +55,6 @@ _overlay_prev: list = []
 _overlay_shown = False
 _hud_tex = None
 _hud_key = None
-# Flight trails, drawn into a texture once per radar layer (see _update_trails).
-_trail_tex = None
-_trail_back = None
-_trail_size = None
-_trail_key = None
-_trail_any = False
-_trail_job = None
-_trail_failed = False
-# About 2 ms of drawing on a Pi 4: a full list (700 to 1000 lines and dots)
-# takes five or six frames.
-_TRAIL_OPS_PER_FRAME = 160
 
 
 def reset() -> None:
@@ -73,16 +62,9 @@ def reset() -> None:
     global _base_tex, _base_size, _base_key, _base_scratch, _renderer_ref
     global _pixel_tex, _sweep_tex, _sweep_key, _rim_tex, _rim_key
     global _overlay, _overlay_tex, _overlay_prev, _overlay_shown
-    global _hud_tex, _hud_key, _trail_tex, _trail_size, _trail_key, _trail_any
-    global _trail_back, _trail_job
+    global _hud_tex, _hud_key
     _hud_tex = None
     _hud_key = None
-    _trail_tex = None
-    _trail_back = None
-    _trail_job = None
-    _trail_size = None
-    _trail_key = None
-    _trail_any = False
     _base_tex = None
     _base_size = None
     _base_key = None
@@ -183,144 +165,21 @@ def _draw_sprite(ren, item, rotation: int, origin_off, brightness: float = 1.0) 
         tex.draw(dstrect=_sprite_dst(sprite, lx, ly, 0, origin_off))
 
 
-def _pixel(ren):
-    """A white 1x1 texture: stretched, tinted and turned it is any line or box."""
-    global _pixel_tex
-    if _pixel_tex is None:
-        dot = pygame.Surface((1, 1), pygame.SRCALPHA)
-        dot.fill((255, 255, 255, 255))
-        _pixel_tex = _video().Texture.from_surface(ren, dot)
-        _pixel_tex.blend_mode = _BLEND
-    return _pixel_tex
-
-
-def trails_ok() -> bool:
-    """False once the trail texture could not be made: the layer bakes them again."""
-    return not _trail_failed
-
-
-_dot_boxes_cache: dict = {}
-
-
-def _dot_boxes(radius: int) -> list:
-    """A filled circle as a few overlapping boxes ``(dx, dy, w, h)``.
-
-    A round texture would need blending, and blending into the trail texture
-    would darken it (see _update_trails). Boxes can be written straight in.
-    """
-    boxes = _dot_boxes_cache.get(radius)
-    if boxes is None:
-        reach: dict = {}
-        for dy in range(radius + 1):
-            half = int(math.sqrt(radius * radius - dy * dy))
-            reach[half] = max(reach.get(half, 0), dy)
-        boxes = [(-half, -dy, 2 * half + 1, 2 * dy + 1) for half, dy in reach.items()]
-        _dot_boxes_cache[radius] = boxes
-    return boxes
-
-
-def _update_trails(ren, ops, key, size, *, may_start: bool = True) -> bool:
-    """Bring the trail texture towards ``key``. True when there are trails to show.
-
-    ``ops`` is the draw list from flight_trails.draw_trail(out=...), in the
-    layer's own (unrotated) pixels: the texture is drawn turned like the base.
-    Lines and dots are written without blending, as pygame.draw writes them
-    onto the CPU overlay, so a joint is not brighter than the line and the
-    texture holds plain (not premultiplied) colour for the one blend on top
-    of the base.
-
-    A new list is drawn into a second texture, ``_TRAIL_OPS_PER_FRAME`` at a
-    time, and swapped in when complete; the previous trails stay up for those
-    few frames. ``may_start`` is False on the frame that uploads a new base,
-    which is already the longest frame of the cycle.
-    """
-    global _trail_tex, _trail_back, _trail_size, _trail_key, _trail_any
-    global _trail_job, _trail_failed
-    if ops is None or _trail_failed:
-        # This layer has its trails baked in: nothing of ours on top of it.
-        _trail_job = None
-        _trail_key = None
-        _trail_any = False
-        return False
-    if _trail_size != size:
-        _trail_tex = _trail_back = _trail_job = _trail_key = None
-        _trail_any = False
-        _trail_size = size
-    if _trail_key == key:
-        return _trail_any
-    try:
-        if _trail_job is None or _trail_job[0] != key:
-            if not may_start:
-                return _trail_any
-            if _trail_back is None:
-                _trail_back = _video().Texture(ren, size, target=True)
-                _trail_back.blend_mode = _BLEND
-            _trail_job = [key, ops, 0, True]
-        _, job_ops, done, fresh = _trail_job
-        pixel = _pixel(ren)
-        ren.target = _trail_back
-        try:
-            if fresh:
-                ren.draw_color = (0, 0, 0, 0)
-                ren.clear()
-                _trail_job[3] = False
-            pixel.blend_mode = 0  # SDL_BLENDMODE_NONE
-            end = min(len(job_ops), done + _TRAIL_OPS_PER_FRAME)
-            for op in job_ops[done:end]:
-                if op[0] == "l":
-                    _, x0, y0, x1, y1, col, alpha, width = op
-                    length = math.hypot(x1 - x0, y1 - y0)
-                    if length < 0.5:
-                        continue
-                    pixel.color = col
-                    pixel.alpha = alpha
-                    pixel.draw(
-                        dstrect=(x0 + 0.5, y0 + 0.5 - width / 2.0, length, width),
-                        angle=math.degrees(math.atan2(y1 - y0, x1 - x0)),
-                        origin=(0, width / 2.0),
-                    )
-                else:
-                    _, x, y, col, alpha, radius = op
-                    pixel.color = col
-                    pixel.alpha = alpha
-                    for dx, dy, w, h in _dot_boxes(int(radius)):
-                        pixel.draw(dstrect=(x + dx, y + dy, w, h))
-            _trail_job[2] = end
-        finally:
-            pixel.blend_mode = _BLEND
-            ren.target = None
-    except Exception:
-        # No render targets on this driver: say so once and let the layer
-        # worker bake the trails as it does on the CPU renderer.
-        import logging
-
-        logging.getLogger(__name__).exception("GPU trail texture failed; trails go back to the layer")
-        _trail_failed = True
-        _trail_tex = _trail_back = _trail_job = _trail_key = None
-        _trail_any = False
-        from display.round_touch.screens import radar
-
-        radar.expire_frame_layer()
-        return False
-    if end >= len(job_ops):
-        _trail_tex, _trail_back = _trail_back, _trail_tex
-        _trail_key = key
-        _trail_any = bool(job_ops)
-        _trail_job = None
-        frame_debug.count("trail_tex_ops", len(job_ops))
-    return _trail_any
-
-
 def _draw_line(ren, item, rotation: int, origin_off) -> None:
     from display.round_touch import rotation as rot
 
+    global _pixel_tex
     x0, y0, x1, y1, color, width = item
     p0 = rot._map_display_point(x0, y0, rotation, origin_off)
     p1 = rot._map_display_point(x1, y1, rotation, origin_off)
     length = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
     if length < 0.5:
         return
-    _pixel(ren)
+    if _pixel_tex is None:
+        dot = pygame.Surface((1, 1), pygame.SRCALPHA)
+        dot.fill((255, 255, 255, 255))
+        _pixel_tex = _video().Texture.from_surface(ren, dot)
+        _pixel_tex.blend_mode = _BLEND
     width = max(1, int(width))
     _pixel_tex.color = tuple(int(c) for c in color[:3])
     _pixel_tex.alpha = int(color[3]) if len(color) > 3 else 255
@@ -477,7 +336,6 @@ def present_radar_sweep(
     live_rim: tuple | None = None,
     held: list | None = None,
     held_alpha: dict | None = None,
-    trail_ops_for=None,
 ) -> bool:
     """Draw and present one radar frame. False when there is nothing to show yet."""
     from display.round_touch import rotation as rot
@@ -493,20 +351,10 @@ def present_radar_sweep(
     if debug:
         _t = time.perf_counter()
     rotation = rot.rotation_degrees()
-    base_before = _base_key
     if not _upload_base(ren, base_layer, (layer_gen, theme.SIZE)):
         return False
     if debug:
         frame_debug.stage("4g_base", time.perf_counter() - _t)
-        _t = time.perf_counter()
-    # Trails of the layer actually in the base texture (a locked upload keeps
-    # the previous one for a frame).
-    trails = trail_ops_for is not None and _update_trails(
-        ren, trail_ops_for(_base_key[0]), _base_key, base_layer.get_size(),
-        may_start=_base_key == base_before,
-    )
-    if debug:
-        frame_debug.stage("4g_trails", time.perf_counter() - _t)
         _t = time.perf_counter()
     origin_off = rot.origin_offset(display, base_layer)
     side_w, side_h = base_layer.get_size()
@@ -518,11 +366,6 @@ def present_radar_sweep(
         _base_tex.draw(dstrect=(origin_off[0], origin_off[1], side_w, side_h), angle=float(rotation))
     else:
         _base_tex.draw(dstrect=(origin_off[0], origin_off[1], side_w, side_h))
-    if trails:
-        if rotation:
-            _trail_tex.draw(dstrect=(origin_off[0], origin_off[1], side_w, side_h), angle=float(rotation))
-        else:
-            _trail_tex.draw(dstrect=(origin_off[0], origin_off[1], side_w, side_h))
     # Held targets (classic motion), then the gliding ones, then the sweep,
     # so the beam still passes over the targets.
     if held:

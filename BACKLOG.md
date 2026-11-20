@@ -563,27 +563,38 @@ Not worth moving yet: tags 16 to 43 ms, rim 7 to 14 ms and bezel 4 to 9 ms per r
 CPU fix found on the way, not a GPU item: `_tick_wifi_link` calls `wifi_setup.auto_hotspot_enabled()` every frame,
 which opens and parses round_touch_settings.json each time (3.4 to 4 percent of samples). Cache it on the mtime.
 
-GPU trails DONE 2026-11-20 (item 1 above, av8or only, not upstream yet). On the GPU renderer the layer worker no
-longer paints trails: `flight_trails.draw_trail(out=...)` lists the same lines and dots, `radar.trail_ops_for(gen)`
-hands the list to `gpu_present._update_trails`, which draws it into a render-target texture (160 operations a
-frame, swapped in when complete, not started on the base upload frame) and blends it over the base. The CPU
-renderer is untouched (trails baked as before); frames composed in software while the GPU is on (volume popover,
-alarm, pan choice) paint the list once per layer (`radar.blit_frame_trails`), and after 2 s without a GPU frame the
-worker bakes again. No render targets on a driver: logged once, trails go back to the layer, GPU renderer stays on.
-Measured on the Pi, Smooth, GPU, 2 minute runs alternated before/after/before/after (25 to 46 targets, 670 to 1180
-operations): trail stage of the rebuild 325 and 337 ms to 100 and 87 ms (what is left is listing in Python plus
-one 1 ms yield per aircraft), frames over 66 ms 12 and 10 to 8 and 4, median worst frame per 2 s window 33.2 and
-35.7 ms to 27.3 and 29.9 ms, fps unchanged (58.8 to 59.1). Classic after: 59.5 fps, no frame over 66 ms. A first
-version that drew the whole texture on the base upload frame was worse (17 frames over 66 ms): keep the slicing.
-The gain is real but modest; runs differ by traffic, so a longer comparison would firm it up.
-Known differences: the trail texture sits on top of the whole layer, so trails cross the few things baked after
-them (parked vessel dots, the bezel band outside the round glass, which the panel does not show), and a line end
-can differ by a pixel from pygame.draw. Next: item 2 (overlays), then 3 (Smooth sprites).
-
 Decision 2026-11-20 (Matt): no shared render-job or draw-list layer. A render-job refactor was built and run on the
 Pi (av8or 2026.11.20.12), then reverted: it was not worth the indirection. Each feature carries its own branch on
 the renderer (`gpu.active()`), as the Classic fade does (upstream PR 299). Do not re-propose the abstraction; add
 the GPU path next to the CPU path inside the feature, CPU stays the default and the fallback.
+
+Decision 2026-11-20 (Matt): GPU trails (item 1) were built, shipped in av8or 2026.11.20.14 and reverted the same
+day. Do not retry them, and do not move anything else that changes the order things are painted in. Trails sit in
+the middle of the baked layer (after rim blips, before baked icons, tags, status, attribution, zoom buttons and the
+round bezel mask), so a separate trail texture drawn over the layer: escaped the bezel mask (stubs through the rim
+ring, trail ends in the corners of a square output), crossed parked vessel dots, baked tags, the zoom pill, the
+attribution and the ISS blip at up to 49 percent alpha, stayed in the old projection for 6 to 8 frames after a
+zoom, pan commit or rotation (and for a whole burst of zoom taps), and could be doubled or missing for one layer
+when the worker and an inline rebuild swapped their bake-or-list decision through a module global. The gain was
+modest anyway (trail stage 330 to 95 ms off the main thread, frames over 66 ms 11 to 6 per 2 minutes, fps equal).
+Rule for a GPU candidate from now on: it is already drawn per frame at present time, as its own item, and the GPU
+version draws the same pixels at the same place in the same sequence. The Classic fade met that; trails did not.
+
+Shortlist under that rule (2026-11-20), replacing the ranking above:
+A. Overlays (item 2 above). Already last in the frame, in a fixed sequence, on both renderers, and the sequence
+   stays as it is. Keep the CPU-drawn pixels: cache each overlay's rendered (and rotated) surface on a content
+   key, upload only when the key changes. No GPU rotation needed, so no filtering difference. 8 ms a frame while
+   one is visible, and no more 4.7 MB surface allocated (plus its rotated copy) per overlay per frame. Risk is a
+   stale overlay from a key that misses an input (marquee, radial animation, notify JSON): key on the drawn
+   state, test each overlay's key, and leave any animating overlay uncached.
+B. Full-frame screens (item 4 above), measure first. One texture is the whole frame, so there is no order to get
+   wrong; the GPU does the 90 degree rotate, which is exact (no filtering). Possible 5 to 6 ms a frame and no
+   rotated full-frame copy. Evidence is 11 windows of one screen: profile the clocks, detail and info first.
+C. Smooth sprites (item 3 above), reduced and spike first. Only "one texture per sprite at a float position":
+   same items, same sequence. NOT the "bezel mask texture drawn last" part, which is an order change. Open
+   question that decides it: whether pygame 2.6.1 passes float destinations through and whether filtered
+   placement looks like the 16 quarter-pixel variants on the panel. If it does not match, drop it.
+Not GPU work, still worth doing: cache `auto_hotspot_enabled()` on the settings mtime (3.4 to 4 percent of samples).
 
 ## Log noise (noticed 2026-11-04)
 

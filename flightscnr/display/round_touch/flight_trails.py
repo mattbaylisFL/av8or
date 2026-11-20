@@ -169,13 +169,8 @@ def draw_trail(
     dot_radius: int = 0,
     dot_gap_px: int = 14,
     proj_key=None,
-    out: list | None = None,
 ) -> None:
     """Paint one aircraft's trail onto an SRCALPHA ``surface``.
-
-    With ``out`` (GPU renderer) nothing is painted: the same lines and dots
-    are appended to it as draw operations (see ``paint_ops``) and ``surface``
-    only gives the size.
 
     ``project(lat, lon)`` returns ``(x, y)`` radar pixels or ``None``. ``head_xy``
     is the (smoothed) current marker position: trail points that lie *ahead* of
@@ -262,23 +257,17 @@ def draw_trail(
                     col = speed_color(0.5 * (s0 + spd))
                 else:
                     col = speed_color(spd if spd is not None else s0)
-                if out is not None:
-                    out.append(("l", x0, y0, x1, y1, col, alpha, max(1, width)))
-                else:
-                    pygame.draw.line(surface, (*col, alpha), (x0, y0), (x1, y1), max(1, width))
-                    draws += 1
+                pygame.draw.line(surface, (*col, alpha), (x0, y0), (x1, y1), max(1, width))
+                draws += 1
                 lines += 1
         if dot_radius and alpha >= 3 and age > 0.0:
             if last_dot is None or (p[0] - last_dot[0]) ** 2 + (p[1] - last_dot[1]) ** 2 >= dot_gap_px ** 2:
                 if (p[0] - cx) ** 2 + (p[1] - cy) ** 2 < reach2:
                     base = speed_color(spd)
                     light = tuple(min(255, c + 70) for c in base)
-                    if out is not None:
-                        out.append(("d", p[0], p[1], light, alpha, dot_radius))
-                    else:
-                        pygame.draw.circle(surface, (*light, alpha), p, dot_radius)
-                        draws += 1
+                    pygame.draw.circle(surface, (*light, alpha), p, dot_radius)
                     last_dot = p
+                    draws += 1
                     dots += 1
         # pygame's many short draw calls retain the GIL. Yield a real sweep
         # slice while a dense history is baking instead of monopolizing the
@@ -288,11 +277,6 @@ def draw_trail(
             sleeps += 1
             time.sleep(0.002)
         prev = (p, spd, alpha)
-    if out is not None and len(xy) >= 8:
-        # Listing is quick but it is still the interpreter: let a sweep frame
-        # in between two aircraft.
-        sleeps += 1
-        time.sleep(0.001)
     if fresh is not None:
         _proj_cache[identity] = (proj_key, fresh)
     frame_debug.count("trail_proj", projected_n)
@@ -300,20 +284,3 @@ def draw_trail(
     frame_debug.count("trail_lines", lines)
     frame_debug.count("trail_dots", dots)
     frame_debug.count("trail_sleeps", sleeps)
-
-
-def paint_ops(surface, ops) -> None:
-    """Paint a draw list from ``draw_trail(out=...)`` onto an SRCALPHA ``surface``.
-
-    The CPU twin of the GPU trail texture, for the frames that are composed in
-    software while the GPU renderer is on (popovers, the alarm).
-    """
-    import pygame
-
-    for op in ops:
-        if op[0] == "l":
-            _, x0, y0, x1, y1, col, alpha, width = op
-            pygame.draw.line(surface, (*col, alpha), (x0, y0), (x1, y1), width)
-        else:
-            _, x, y, col, alpha, radius = op
-            pygame.draw.circle(surface, (*col, alpha), (x, y), radius)
