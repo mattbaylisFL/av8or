@@ -201,7 +201,6 @@ def _renderer_state() -> dict:
         return {"state": "", "reason": ""}
 
 
-
 @app.get("/favicon.ico")
 def favicon():
     return send_from_directory(os.path.join(WEB_DIR, "static"), "favicon.ico", mimetype="image/x-icon")
@@ -1885,15 +1884,15 @@ def radar_save():
         settings.set_hud_tap_labels(bool(data.get("hud_tap_labels")))
     if "radar_motion" in data:
         settings.set_radar_motion(str(data.get("radar_motion") or ""))
+    elif "smooth_motion" in data:
+        # Older portal pages and scripts still send the on/off switch.
+        settings.set_smooth_motion(bool(data.get("smooth_motion")))
     if "renderer" in data:
         # Saved only on a change: saving also clears a failed GPU start, and
         # every portal save would otherwise retry it at the next restart.
         wanted = str(data.get("renderer") or "").strip().lower()
-        if wanted != settings.renderer_setting() or data.get("renderer_retry"):
+        if wanted != settings.renderer_setting():
             settings.set_renderer(wanted)
-    elif "smooth_motion" in data:
-        # Older portal pages and scripts still send the on/off switch.
-        settings.set_smooth_motion(bool(data.get("smooth_motion")))
     if "show_tag_leaders" in data:
         settings.set_show_tag_leaders(bool(data.get("show_tag_leaders")))
     if "tag_text_shadow" in data:

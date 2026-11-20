@@ -649,28 +649,6 @@ def present_radar_sweep(
 
 
 
-def _present_gpu(display, base_layer, layer_gen, sweep_angle, sweep_color, **parts) -> bool:
-    """One radar frame on the GPU renderer. False hands the frame to the CPU path."""
-    global _needs_full
-    from display.round_touch import gpu_present
-
-    try:
-        if gpu_present.present_radar_sweep(
-            display, base_layer, layer_gen, sweep_angle, sweep_color, **parts
-        ):
-            return True
-    except Exception as exc:
-        logger.exception("GPU radar frame failed")
-        gpu.disable(f"radar frame failed: {exc}")
-        try:
-            gpu_present.reset()
-        except Exception:
-            pass
-    # The CPU path has not drawn this window yet: repaint all of it.
-    _needs_full = True
-    return False
-
-
 def _held_rect(rotation: int, key, item, bounds: pygame.Rect):
     """Where a held item lands on the base, without drawing it."""
     if key[0] == "c":
@@ -887,6 +865,28 @@ def _take_upload_bands(width: int, height: int) -> list[pygame.Rect]:
     if _upload_y >= height:
         _upload_y = None
     return [rect]
+
+
+def _present_gpu(display, base_layer, layer_gen, sweep_angle, sweep_color, **parts) -> bool:
+    """One radar frame on the GPU renderer. False hands the frame to the CPU path."""
+    global _needs_full
+    from display.round_touch import gpu_present
+
+    try:
+        if gpu_present.present_radar_sweep(
+            display, base_layer, layer_gen, sweep_angle, sweep_color, **parts
+        ):
+            return True
+    except Exception as exc:
+        logger.exception("GPU radar frame failed")
+        gpu.disable(f"radar frame failed: {exc}")
+        try:
+            gpu_present.reset()
+        except Exception:
+            pass
+    # The CPU path has not drawn this window yet: repaint all of it.
+    _needs_full = True
+    return False
 
 
 def _map_display_point(lx: float, ly: float, rotation: int, origin_off) -> tuple[int, int]:

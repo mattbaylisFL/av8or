@@ -296,6 +296,32 @@ class TestGpuFrameMatchesCpu:
         assert got.get_at((100 + 78, 100))[:3] == (255, 0, 0)
         assert got.get_at((100 + 60, 100))[:3] == (0, 0, 0)
 
+    @pytest.mark.parametrize("rot", [0, 90, 180, 270])
+    def test_classic_held_targets_match_the_cpu_path(self, software_renderer, monkeypatch, rot):
+        base = pygame.Surface((SIDE, SIDE))
+        base.fill((0, 0, 0))
+        tip = (("c", "a"), (30.0, 150.0, 90.0, 150.0, (200, 200, 0, 255), 3))
+        sprites = [
+            (("i", "a"), (_dot((255, 0, 0, 255), 20), 50, 60)),
+            (("l", "a"), (_dot((0, 0, 255, 128), 20), 140, 60)),
+        ]
+        monkeypatch.setattr(rotation_mod, "rotation_degrees", lambda: rot)
+        display = pygame.Surface((SIDE, SIDE))
+        rotation_mod.present_radar_sweep(
+            display, base, 1, 0.0, (48, 255, 96), draw_sweep=False, held=sprites,
+        )
+        got = _shot(software_renderer)
+        want = _cpu_frame(monkeypatch, rot, base, draw_sweep=False, held=sprites)
+        assert _max_diff(got, want) <= 2
+        assert got.get_at(rotation_mod._map_display_point(50, 60, rot, (0, 0)))[:3] == (255, 0, 0)
+        # The trail tip is a line: its edges differ by renderer, its body does not.
+        rotation_mod.present_radar_sweep(
+            display, base, 1, 0.0, (48, 255, 96), draw_sweep=False, held=[tip] + sprites,
+        )
+        got = _shot(software_renderer)
+        assert got.get_at(rotation_mod._map_display_point(60, 150, rot, (0, 0)))[:3] == (200, 200, 0)
+        assert got.get_at(rotation_mod._map_display_point(60, 170, rot, (0, 0)))[:3] == (0, 0, 0)
+
     def test_new_layer_generation_is_uploaded(self, software_renderer, monkeypatch):
         monkeypatch.setattr(rotation_mod, "rotation_degrees", lambda: 0)
         base = pygame.Surface((SIDE, SIDE))
@@ -316,7 +342,18 @@ class TestGpuFrameMatchesCpu:
         assert rotation_mod._next_base is None
 
 
-class TestHeldAlpha:
+class TestSpritesAndOverlays:
+    def test_a_sprite_can_be_drawn_dimmed(self, software_renderer, monkeypatch):
+        monkeypatch.setattr(rotation_mod, "rotation_degrees", lambda: 0)
+        white = _dot((255, 255, 255, 255), 20)
+        software_renderer.draw_color = (0, 0, 0, 255)
+        software_renderer.clear()
+        gpu_present._draw_sprite(software_renderer, (white, 50, 50), 0, (0, 0), 0.5)
+        gpu_present._draw_sprite(software_renderer, (white, 150, 50), 0, (0, 0))
+        got = _shot(software_renderer)
+        assert abs(got.get_at((50, 50))[0] - 128) <= 2
+        assert got.get_at((150, 50))[0] == 255
+
     def test_held_sprite_is_drawn_at_its_brightness(self, software_renderer, monkeypatch):
         monkeypatch.setattr(rotation_mod, "rotation_degrees", lambda: 0)
         base = pygame.Surface((SIDE, SIDE))
@@ -445,7 +482,10 @@ class TestPortalControl:
         assert '<select id="renderer">' in html
         for value in gpu.RENDERERS:
             assert f'<option value="{value}"' in html
-        assert html.count('renderer: $("renderer")') == 2
+        # Only the Radar save changes the renderer (after OK / Cancel); the
+        # display-page saves send the value already saved.
+        assert html.count('renderer: $("renderer")') == 1
+        assert html.count("renderer: savedRenderer,") == 1
 
     def test_every_locale_has_the_renderer_strings(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -120,13 +120,17 @@ RIM_TARGET_STYLE_LABELS = {
 # steps them at each data update, "smooth" glides them every frame, "classic"
 # repaints each target only when the sweep passes its bearing.
 RADAR_MOTIONS = ("standard", "smooth", "classic")
-# Renderer: "cpu" draws on software surfaces (the default), "gpu" draws the
-# radar with textures when the device has an accelerated renderer (see gpu.py).
-RENDERERS = ("cpu", "gpu")
 RADAR_MOTION_LABELS = {
     "standard": "settings.opt.motion.standard",
     "smooth": "settings.opt.motion.smooth",
     "classic": "settings.opt.motion.classic",
+}
+# Renderer: "cpu" draws on software surfaces (the default), "gpu" draws the
+# radar with textures when the device has an accelerated renderer (see gpu.py).
+RENDERERS = ("cpu", "gpu")
+RENDERER_LABELS = {
+    "cpu": "settings.opt.renderer.cpu",
+    "gpu": "settings.opt.renderer.gpu",
 }
 # Follow speed-based zoom bounds (issue #114) — portal / settings.json.
 LIVE_TRACKING_PREVIEW_MINUTES_MIN = 1.0
@@ -2985,10 +2989,24 @@ def set_radar_motion(value: str) -> str:
     return radar_motion_setting()
 
 
+def classic_radar_enabled() -> bool:
+    """True when targets repaint on the sweep instead of every frame."""
+    return radar_motion() == "classic"
+
+
+def smooth_motion_setting() -> bool:
+    """True when the saved motion draws icons per frame (smooth or classic)."""
+    return radar_motion_setting() != "standard"
+
+
 def renderer_setting() -> str:
     """Saved renderer: cpu (default) | gpu. Takes effect when the app restarts."""
     raw = str(_state.get("renderer") or "").strip().lower()
     return raw if raw in RENDERERS else "cpu"
+
+
+def renderer_label() -> str:
+    return tr(RENDERER_LABELS.get(renderer_setting(), "settings.opt.renderer.cpu"))
 
 
 def set_renderer(value: str) -> str:
@@ -3003,16 +3021,6 @@ def set_renderer(value: str) -> str:
     except Exception:
         pass
     return renderer_setting()
-
-
-def classic_radar_enabled() -> bool:
-    """True when targets repaint on the sweep instead of every frame."""
-    return radar_motion() == "classic"
-
-
-def smooth_motion_setting() -> bool:
-    """True when the saved motion draws icons per frame (smooth or classic)."""
-    return radar_motion_setting() != "standard"
 
 
 def smooth_motion_enabled() -> bool:
