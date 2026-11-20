@@ -563,6 +563,23 @@ Not worth moving yet: tags 16 to 43 ms, rim 7 to 14 ms and bezel 4 to 9 ms per r
 CPU fix found on the way, not a GPU item: `_tick_wifi_link` calls `wifi_setup.auto_hotspot_enabled()` every frame,
 which opens and parses round_touch_settings.json each time (3.4 to 4 percent of samples). Cache it on the mtime.
 
+GPU trails DONE 2026-11-20 (item 1 above, av8or only, not upstream yet). On the GPU renderer the layer worker no
+longer paints trails: `flight_trails.draw_trail(out=...)` lists the same lines and dots, `radar.trail_ops_for(gen)`
+hands the list to `gpu_present._update_trails`, which draws it into a render-target texture (160 operations a
+frame, swapped in when complete, not started on the base upload frame) and blends it over the base. The CPU
+renderer is untouched (trails baked as before); frames composed in software while the GPU is on (volume popover,
+alarm, pan choice) paint the list once per layer (`radar.blit_frame_trails`), and after 2 s without a GPU frame the
+worker bakes again. No render targets on a driver: logged once, trails go back to the layer, GPU renderer stays on.
+Measured on the Pi, Smooth, GPU, 2 minute runs alternated before/after/before/after (25 to 46 targets, 670 to 1180
+operations): trail stage of the rebuild 325 and 337 ms to 100 and 87 ms (what is left is listing in Python plus
+one 1 ms yield per aircraft), frames over 66 ms 12 and 10 to 8 and 4, median worst frame per 2 s window 33.2 and
+35.7 ms to 27.3 and 29.9 ms, fps unchanged (58.8 to 59.1). Classic after: 59.5 fps, no frame over 66 ms. A first
+version that drew the whole texture on the base upload frame was worse (17 frames over 66 ms): keep the slicing.
+The gain is real but modest; runs differ by traffic, so a longer comparison would firm it up.
+Known differences: the trail texture sits on top of the whole layer, so trails cross the few things baked after
+them (parked vessel dots, the bezel band outside the round glass, which the panel does not show), and a line end
+can differ by a pixel from pygame.draw. Next: item 2 (overlays), then 3 (Smooth sprites).
+
 Decision 2026-11-20 (Matt): no shared render-job or draw-list layer. A render-job refactor was built and run on the
 Pi (av8or 2026.11.20.12), then reverted: it was not worth the indirection. Each feature carries its own branch on
 the renderer (`gpu.active()`), as the Classic fade does (upstream PR 299). Do not re-propose the abstraction; add

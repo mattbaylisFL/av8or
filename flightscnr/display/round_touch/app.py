@@ -1087,6 +1087,7 @@ class RoundTouchDisplay:
                         held=held,
                         held_for_gen=radar.live_held_frame_for,
                         held_alpha=radar.live_held_alpha(),
+                        trail_ops_for=radar.trail_ops_for,
                     )
                     self._stage("4_present", time.perf_counter() - _t)
                 else:
@@ -1103,6 +1104,7 @@ class RoundTouchDisplay:
                         held=held,
                         held_for_gen=radar.live_held_frame_for,
                         held_alpha=radar.live_held_alpha(),
+                        trail_ops_for=radar.trail_ops_for,
                     )
                 return
 
@@ -1180,6 +1182,7 @@ class RoundTouchDisplay:
                     except pygame.error as exc:
                         if "locked" not in str(exc).lower():
                             raise
+                    radar.blit_frame_trails(self.surface)
                     radar.draw_live_icons(self.surface)
                 bezel_applied = False
             if FRAME_DEBUG:

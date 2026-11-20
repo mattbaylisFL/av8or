@@ -606,6 +606,7 @@ def draw_radar(
             except pygame.error as exc:
                 if "locked" not in str(exc).lower():
                     raise
+            blit_frame_trails(surface)
             draw_live_icons(surface)
             _draw_live_rim_on_frame(surface)
             bezel_applied = True
@@ -625,6 +626,7 @@ def draw_radar(
             except pygame.error as exc:
                 if "locked" not in str(exc).lower():
                     raise
+            blit_frame_trails(surface)
             draw_live_icons(surface)
             _draw_live_rim_on_frame(surface)
             # Pill is no longer baked into the layer — draw full HUD + popover.
@@ -1421,6 +1423,20 @@ _live_pending: tuple[list, list, dict] | None = None
 # {identity: ((x, y), rgb, width)} — the live frame extends it to the live icon.
 _trail_heads_building: dict = {}
 _live_heads: dict = {}
+# GPU renderer: trails are not baked into the layer. The layer worker makes a
+# draw list (flight_trails.draw_trail(out=...)) and the present path draws it
+# into a texture, which takes about 3 ms where the bake took 260 to 300 ms.
+# Per layer generation, like the trail heads; None means that layer has its
+# trails baked in.
+_trail_ops_building: list | None = None
+_trail_ops_by_gen: dict = {}
+# When the GPU present path last asked for a draw list (time.monotonic()).
+# Frames composed in software (popover, alarm) do not ask, so after a moment
+# the worker bakes the trails again.
+_trail_ops_asked_at = 0.0
+_TRAIL_OPS_IDLE_S = 2.0
+# The current draw list painted in software: (layer generation, surface).
+_trail_ops_painted: tuple = (None, None)
 # Live trail tips for this frame: (x0, y0, x1, y1, rgba, width) in logical
 # pixels. Drawn as lines under the sweep, not as a new sprite every frame.
 _live_connectors: list = []
@@ -1489,9 +1505,12 @@ _LIVE_FRAME_BUDGET_S = 0.004
 def _set_pending_live_specs(icons, labels) -> None:
     global _live_pending
     if icons is None:
-        _live_pending = ([], [], {}, [])
+        _live_pending = ([], [], {}, [], None)
     else:
-        _live_pending = (icons, labels, dict(_trail_heads_building), list(_rim_building or ()))
+        _live_pending = (
+            icons, labels, dict(_trail_heads_building), list(_rim_building or ()),
+            _trail_ops_building,
+        )
 
 
 def _publish_live_specs() -> None:
@@ -1502,6 +1521,9 @@ def _publish_live_specs() -> None:
         _heads_by_gen[_frame_layer_gen] = _live_heads
         for gen in [g for g in _heads_by_gen.copy() if g < _frame_layer_gen - 3]:
             _heads_by_gen.pop(gen, None)
+        _trail_ops_by_gen[_frame_layer_gen] = _live_pending[4] if len(_live_pending) > 4 else None
+        for gen in [g for g in _trail_ops_by_gen.copy() if g < _frame_layer_gen - 3]:
+            _trail_ops_by_gen.pop(gen, None)
         _live_rim_targets = _live_pending[3] if len(_live_pending) > 3 else []
         keep = {st["id"] for st in _live_icons}
         _live_ids = keep
@@ -2255,10 +2277,53 @@ def _trail_overlay_surface(size) -> pygame.Surface:
     return _trail_overlay
 
 
+def _trails_on_gpu() -> bool:
+    """True when the GPU present path is drawing the trails, not the layer."""
+    if not (gpu.active() and live_icons_enabled()):
+        return False
+    from display.round_touch import gpu_present
+
+    return (
+        gpu_present.trails_ok()
+        and time.monotonic() - _trail_ops_asked_at < _TRAIL_OPS_IDLE_S
+    )
+
+
+def trail_ops_for(layer_gen) -> list | None:
+    """Trail draw list for layer ``layer_gen`` (GPU present path), or None if baked."""
+    global _trail_ops_asked_at
+    _trail_ops_asked_at = time.monotonic()
+    return _trail_ops_by_gen.get(layer_gen)
+
+
+def blit_frame_trails(surface) -> None:
+    """Trails for a frame composed in software from the cached layer.
+
+    On the GPU renderer the layer has no trails in it. The few places that
+    blit the layer themselves (volume popover, alarm, pan choice) call this
+    after it; the list is painted once per layer and kept.
+    """
+    global _trail_ops_painted
+    gen = _frame_layer_gen
+    ops = _trail_ops_by_gen.get(gen)
+    if not ops:
+        return
+    from display.round_touch import flight_trails
+
+    if _trail_ops_painted[0] != gen or _trail_ops_painted[1].get_size() != surface.get_size():
+        painted = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        painted.fill((0, 0, 0, 0))
+        flight_trails.paint_ops(painted, ops)
+        _trail_ops_painted = (gen, painted)
+    surface.blit(_trail_ops_painted[1], (0, 0))
+
+
 def _draw_trails(surface, items) -> None:
     """Subtle, translucent speed-coloured paths under the icons (FR24 style)."""
-    global _trail_heads_building
+    global _trail_heads_building, _trail_ops_building
     mode = settings.flight_trails_mode()
+    # On the GPU renderer the lines go into a draw list, not onto the layer.
+    ops = _trail_ops_building = [] if mode != "off" and _trails_on_gpu() else None
     if mode == "off":
         _trail_heads_building = {}
         return
@@ -2294,11 +2359,11 @@ def _draw_trails(surface, items) -> None:
                 continue
             x, y = int(round(cached[0][0])), int(round(cached[0][1]))
         if overlay is None:
-            overlay = _trail_overlay_surface(surface.get_size())
+            overlay = surface if ops is not None else _trail_overlay_surface(surface.get_size())
         flight_trails.draw_trail(
             overlay, ident, project, width=width, now=now,
             base_alpha=_TRAIL_ALPHA, head_xy=(x, y), dot_radius=dot_r,
-            proj_key=proj_key,
+            proj_key=proj_key, out=ops,
         )
         pts = flight_trails.points(ident)
         if pts:
@@ -2313,16 +2378,16 @@ def _draw_trails(surface, items) -> None:
         if mode != "all" and ident != _trail_selected_id:
             continue
         if overlay is None:
-            overlay = _trail_overlay_surface(surface.get_size())
+            overlay = surface if ops is not None else _trail_overlay_surface(surface.get_size())
         frame_debug.count("trail_ids_gone")
         gone.add(ident)
         flight_trails.draw_trail(
             overlay, ident, project, width=width, now=now,
             base_alpha=_TRAIL_ALPHA, head_xy=None, dot_radius=dot_r,
-            proj_key=proj_key,
+            proj_key=proj_key, out=ops,
         )
     flight_trails.prune_projection_cache(drawn | gone)
-    if overlay is not None:
+    if overlay is not None and ops is None:
         surface.blit(overlay, (0, 0))
 
 
