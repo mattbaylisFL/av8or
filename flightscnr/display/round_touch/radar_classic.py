@@ -144,3 +144,14 @@ def glow_brightness(age_s: float, period_s: float, *, holds_floor: bool = True) 
     if not holds_floor and turns > 1.0:
         level *= math.exp(-(turns - 1.0) / GLOW_GONE_DECAY)
     return max(0.0, min(1.0, level))
+
+
+def paint_gone(age_s: float, period_s: float) -> bool:
+    """True once paint that is not renewed has faded out on every renderer.
+
+    The stepped and the smooth fade end at slightly different moments; the
+    radar screen keeps a departed target until both have, so its lifetime does
+    not depend on which renderer is drawing it.
+    """
+    stepped = fade_brightness(fade_level(age_s, period_s), holds_floor=False)
+    return stepped <= FADE_GONE and glow_brightness(age_s, period_s, holds_floor=False) <= FADE_GONE

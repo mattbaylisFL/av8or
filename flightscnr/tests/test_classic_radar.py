@@ -25,7 +25,7 @@ import pygame  # noqa: E402
 
 pygame.init()
 
-from display.round_touch import radar_classic, settings, theme  # noqa: E402
+from display.round_touch import radar_classic, render_job, settings, theme  # noqa: E402
 from display.round_touch.screens import radar  # noqa: E402
 
 
@@ -676,14 +676,19 @@ class TestFadeSteps:
         assert radar_classic.fade_level(3.0, 0.0) == 0
 
 
+def _shown():
+    """The held frame as the CPU renderer shows it: fading sprites dimmed in steps."""
+    return dict(render_job.stepped_held(radar.live_held_frame(), radar.live_held_paint()))
+
+
 class TestFadedSprites:
     def test_level_zero_is_the_sprite_itself(self):
         sprite = _dot((200, 100, 50, 255))
-        assert radar._faded(sprite, 0) is sprite
+        assert render_job._dimmed(sprite, 0, True) is sprite
 
     def test_dimmed_copy_keeps_colour_and_scales_alpha(self):
         sprite = _dot((200, 100, 50, 255))
-        dim = radar._faded(sprite, 4)
+        dim = render_job._dimmed(sprite, 4, True)
         assert dim is not sprite
         assert dim.get_at((2, 2))[:3] == (200, 100, 50)
         assert dim.get_at((2, 2))[3] == pytest.approx(255 * radar_classic.FADE_FLOOR, abs=2)
@@ -691,18 +696,17 @@ class TestFadedSprites:
 
     def test_same_level_reuses_the_copy(self):
         sprite = _dot((200, 100, 50, 255))
-        assert radar._faded(sprite, 2) is radar._faded(sprite, 2)
+        assert render_job._dimmed(sprite, 2, True) is render_job._dimmed(sprite, 2, True)
 
     def test_departed_paint_returns_none_when_gone(self):
         sprite = _dot((200, 100, 50, 255))
-        assert radar._faded(sprite, 5, holds_floor=False) is not None
-        assert radar._faded(sprite, 6, holds_floor=False) is None
+        assert render_job._dimmed(sprite, 5, False) is not None
+        assert render_job._dimmed(sprite, 6, False) is None
 
 
 class TestClassicFade:
     def _alpha(self, key):
-        sprite = dict(radar.live_held_frame())[key][0]
-        return sprite.get_at((2, 2))[3]
+        return _shown()[key][0].get_at((2, 2))[3]
 
     def test_target_dims_between_passes_and_brightens_on_the_pass(self, scene):
         scene["frame"](0.0, now=100.0)
@@ -721,6 +725,7 @@ class TestClassicFade:
         first = dict(radar.live_held_frame())[("i", "west")]
         scene["frame"](30.0, now=101.9)
         assert dict(radar.live_held_frame())[("i", "west")] == first
+        assert _shown()[("i", "west")][0] is _shown()[("i", "west")][0]
 
     def test_selected_target_stays_at_full_brightness(self, scene, monkeypatch):
         monkeypatch.setattr(radar, "_trail_selected_id", "west")
@@ -760,9 +765,12 @@ class TestDepartedTargetsFadeOut:
         scene["frame"](0.0, now=100.0)
         self._depart(scene, monkeypatch, "west")
         scene["frame"](10.0, now=106.5)
-        alpha = dict(radar.live_held_frame())[("i", "west")][0].get_at((2, 2))[3]
+        alpha = _shown()[("i", "west")][0].get_at((2, 2))[3]
         assert 0 < alpha < 255 * radar_classic.FADE_FLOOR
         scene["frame"](20.0, now=108.0)
+        assert ("i", "west") not in _shown()
+        # The entry itself goes once the smooth fade has run out as well.
+        scene["frame"](30.0, now=114.0)
         assert ("i", "west") not in dict(radar.live_held_frame())
         assert "west" not in radar._ghosts
 
@@ -823,7 +831,7 @@ class TestRimTargetsOnTheBeam:
         monkeypatch.setattr(radar, "_live_rim_targets", [_rim("far", cx, cy + 300)])
         scene["frame"](0.0, now=100.0)
         scene["frame"](90.0, now=103.0)
-        assert dict(radar.live_held_frame())[("r", "far")][0].get_at((2, 2))[3] < 255
+        assert _shown()[("r", "far")][0].get_at((2, 2))[3] < 255
 
     def test_rim_targets_sit_under_in_range_icons(self, scene, monkeypatch):
         monkeypatch.setattr(radar, "_live_rim_targets", [_rim("far", scene["cx"], scene["cy"] + 300)])
