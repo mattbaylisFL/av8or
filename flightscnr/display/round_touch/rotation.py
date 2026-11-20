@@ -234,7 +234,7 @@ def present_radar_sweep(
     live_rim: tuple | None = None,
     held: list | None = None,
     held_for_gen=None,
-    held_paint: dict | None = None,
+    held_alpha: dict | None = None,
 ) -> None:
     """Blit a cached rotated radar base, then optionally draw the sweep.
 
@@ -252,26 +252,16 @@ def present_radar_sweep(
     ``held_for_gen(layer_gen)`` returns that list as it will be on a layer
     not shown yet (see radar.live_held_frame_for).
 
-    ``held_paint`` maps a held key to how old its paint is (see render_job).
-    On the GPU renderer the frame is drawn by ``gpu_present`` instead; here
-    the fade is shown with stepped dimmed copies.
+    On the GPU renderer the frame is drawn by ``gpu_present`` instead;
+    ``held_alpha`` is its per-target brightness (radar.live_held_alpha).
     """
     if gpu.active() and _present_gpu(
         display, base_layer, layer_gen, sweep_angle_logical, sweep_color,
         draw_sweep=draw_sweep, live_icons=live_icons,
         live_connectors=live_connectors, live_rim=live_rim,
-        held=held, held_paint=held_paint,
+        held=held, held_alpha=held_alpha,
     ):
         return
-    if held_paint:
-        from display.round_touch import render_job
-
-        held = render_job.stepped_held(held, held_paint)
-        if held_for_gen is not None:
-            _unstepped_for_gen = held_for_gen
-
-            def held_for_gen(gen):
-                return render_job.stepped_held(_unstepped_for_gen(gen), held_paint)
     global _rot_base, _rot_base_key, _prev_sweep_rect, _pending_key, _needs_full
     global _next_base, _next_base_key, _prev_hud_rect, _prev_bubble_rect
     global _prev_airport_callout_rect, _prev_location_toast_rect

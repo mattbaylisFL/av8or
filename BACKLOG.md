@@ -563,24 +563,10 @@ Not worth moving yet: tags 16 to 43 ms, rim 7 to 14 ms and bezel 4 to 9 ms per r
 CPU fix found on the way, not a GPU item: `_tick_wifi_link` calls `wifi_setup.auto_hotspot_enabled()` every frame,
 which opens and parses round_touch_settings.json each time (3.4 to 4 percent of samples). Cache it on the mtime.
 
-Render jobs (step 1 DONE 2026-11-20, av8or only, not upstream yet): `display/round_touch/render_job.py`. A screen
-builds one job (`screens/radar.frame_job` returns a `RadarJob`) and calls `render_job.submit`; the GPU backend
-(`gpu_present`) or the CPU backend (`rotation`) draws it, and the CPU backend takes the same job if the GPU one
-fails. A job carries intent, not renderer detail: Classic radar publishes the paint age of each held target
-(`held_paint`: key to `(age_s, holds_floor)`), the GPU backend turns it into a smooth alpha
-(`render_job.paint_alpha`) and the CPU backend into stepped dimmed copies (`render_job.stepped_held`). The radar
-screen no longer imports `gpu` (a test asserts it), the six keyword arguments threaded through app.py twice are one
-object, and a departed target's lifetime is one rule for both renderers (`radar_classic.paint_gone`). The CPU look is
-unchanged (same steps, same timing). To add something to the radar frame: a field on `RadarJob`, filled in
-`frame_job`, drawn in the two backends.
-Next steps on the same shape, each its own change: (2) overlays as Layer jobs: each overlay gives a content key and
-a build function, the CPU backend caches the rotated copy per key and the GPU backend a texture per key; this
-replaces the eight `rotation._blit_*` functions, their eight `_prev_*_rect` globals and the per-frame full-surface
-allocate and rotate (item 2 above, 8 ms a frame). (3) Smooth sprites carry a float centre and the backend places
-them: the GPU directly, the CPU through the quarter-pixel variants, which move out of the radar screen into the CPU
-backend (item 3 above). (4) Trails as Segment items (item 1 above, after the spike). The upstream fade branch
-(feat/classic-gpu-fade) still uses the older `held_alpha` shape: if these go upstream, send the render job change
-as its own PR after the fade PR merges.
+Decision 2026-11-20 (Matt): no shared render-job or draw-list layer. A render-job refactor was built and run on the
+Pi (av8or 2026.11.20.12), then reverted: it was not worth the indirection. Each feature carries its own branch on
+the renderer (`gpu.active()`), as the Classic fade does (upstream PR 299). Do not re-propose the abstraction; add
+the GPU path next to the CPU path inside the feature, CPU stays the default and the fallback.
 
 ## Log noise (noticed 2026-11-04)
 

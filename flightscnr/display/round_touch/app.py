@@ -69,7 +69,6 @@ from display.round_touch import (
 from utilities import aircraft_alert
 from display.round_touch import alert_sounds
 from display.round_touch import gpu
-from display.round_touch import render_job
 from i18n import tr
 from display.round_touch.screens import (
     analog_clock,
@@ -1061,17 +1060,50 @@ class RoundTouchDisplay:
         ):
             layer, layer_gen = radar.frame_layer_snapshot()
             if layer is not None:
+                show_sweep = settings.show_sweep_line()
+                # Build icons first, then sample the beam, so a slow icon
+                # frame cannot freeze the angle the wedge is drawn at.
                 if FRAME_DEBUG:
                     _t = time.perf_counter()
-                job = radar.frame_job(
-                    layer, layer_gen, draw_sweep=settings.show_sweep_line()
-                )
+                live_icons = radar.live_icon_frame()
+                live_connectors = radar.live_trail_connectors()
+                live_rim = radar.live_rim_spec()
+                held = radar.live_held_frame()
                 if FRAME_DEBUG:
                     self._stage("4L_live_frame", time.perf_counter() - _t)
-                    _t = time.perf_counter()
-                render_job.submit(self._display, job)
+                sweep_angle = radar.current_sweep_angle()
                 if FRAME_DEBUG:
+                    _t = time.perf_counter()
+                    rotation.present_radar_sweep(
+                        self._display,
+                        layer,
+                        layer_gen,
+                        sweep_angle,
+                        theme.SWEEP,
+                        draw_sweep=show_sweep,
+                        live_icons=live_icons,
+                        live_connectors=live_connectors,
+                        live_rim=live_rim,
+                        held=held,
+                        held_for_gen=radar.live_held_frame_for,
+                        held_alpha=radar.live_held_alpha(),
+                    )
                     self._stage("4_present", time.perf_counter() - _t)
+                else:
+                    rotation.present_radar_sweep(
+                        self._display,
+                        layer,
+                        layer_gen,
+                        sweep_angle,
+                        theme.SWEEP,
+                        draw_sweep=show_sweep,
+                        live_icons=live_icons,
+                        live_connectors=live_connectors,
+                        live_rim=live_rim,
+                        held=held,
+                        held_for_gen=radar.live_held_frame_for,
+                        held_alpha=radar.live_held_alpha(),
+                    )
                 return
 
         if FRAME_DEBUG:

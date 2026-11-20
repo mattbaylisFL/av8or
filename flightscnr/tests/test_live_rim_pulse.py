@@ -183,11 +183,6 @@ def test_present_call_sites_pass_the_live_rim():
 
     from display.round_touch import app as app_mod
 
-    from display.round_touch import render_job
-    from display.round_touch.screens import radar
-
-    # The fast path hands one job to the renderer; the job carries the rim.
     src = inspect.getsource(app_mod.RoundTouchDisplay._present)
-    assert "radar.frame_job(" in src and "render_job.submit(" in src
-    assert "live_rim=live_rim_spec()" in inspect.getsource(radar.frame_job)
-    assert "live_rim=job.live_rim" in inspect.getsource(render_job.submit)
+    assert src.count("live_rim=live_rim") == 2
+    assert "radar.live_rim_spec()" in src

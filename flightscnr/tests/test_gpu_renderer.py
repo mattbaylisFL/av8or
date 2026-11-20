@@ -25,7 +25,7 @@ import pygame  # noqa: E402
 
 pygame.init()
 
-from display.round_touch import gpu, gpu_present, radar_classic, render_job, settings, theme  # noqa: E402
+from display.round_touch import gpu, gpu_present, radar_classic, settings, theme  # noqa: E402
 from display.round_touch import rotation as rotation_mod  # noqa: E402
 from display.round_touch.screens import radar  # noqa: E402
 
@@ -360,11 +360,10 @@ class TestSpritesAndOverlays:
         base.fill((0, 0, 0))
         white = _dot((255, 255, 255, 255), 20)
         held = [(("i", "a"), (white, 50, 50)), (("i", "b"), (white, 150, 50))]
-        monkeypatch.setattr(radar_classic, "glow_brightness", lambda *a, **k: 0.5)
-        render_job.submit(pygame.Surface((SIDE, SIDE)), render_job.RadarJob(
-            base=base, base_gen=1, sweep_angle=0.0, sweep_color=(0, 0, 0), draw_sweep=False,
-            held=held, held_paint={("i", "a"): (1.0, True)},
-        ))
+        rotation_mod.present_radar_sweep(
+            pygame.Surface((SIDE, SIDE)), base, 1, 0.0, (0, 0, 0), draw_sweep=False,
+            held=held, held_alpha={("i", "a"): 0.5},
+        )
         got = _shot(software_renderer)
         assert abs(got.get_at((50, 50))[0] - 128) <= 2
         assert got.get_at((150, 50))[0] == 255
@@ -415,58 +414,30 @@ class TestGlowCurve:
 
 
 class TestFadeFollowsTheRenderer:
-    @pytest.mark.parametrize("gpu_on", [False, True])
-    def test_the_radar_screen_publishes_the_same_paint_on_either_renderer(self, monkeypatch, gpu_on):
-        monkeypatch.setattr(gpu, "_active", gpu_on)
+    def test_cpu_renderer_returns_a_dimmed_copy(self, monkeypatch):
+        monkeypatch.setattr(gpu, "_active", False)
         monkeypatch.setattr(radar, "_CLASSIC_FADE", True)
         monkeypatch.setattr(theme, "SWEEP_PERIOD_MS", 4000)
-        radar._held_paint_next.clear()
+        radar._held_alpha_next.clear()
+        sprite = _dot((255, 255, 255, 255))
+        shown = radar._fade(("i", "a"), sprite, 100.0, 102.0)
+        assert shown is not sprite and shown.get_at((2, 2))[3] < 255
+        assert radar._held_alpha_next == {}
+
+    def test_gpu_renderer_keeps_the_sprite_and_publishes_brightness(self, monkeypatch):
+        monkeypatch.setattr(gpu, "_active", True)
+        monkeypatch.setattr(radar, "_CLASSIC_FADE", True)
+        monkeypatch.setattr(theme, "SWEEP_PERIOD_MS", 4000)
+        radar._held_alpha_next.clear()
         sprite = _dot((255, 255, 255, 255))
         assert radar._fade(("i", "a"), sprite, 100.0, 102.0) is sprite
-        assert radar._held_paint_next[("i", "a")] == (2.0, True)
-        assert radar._fade(("i", "b"), sprite, 100.0, 100.0) is sprite
-        assert ("i", "b") not in radar._held_paint_next
-        assert radar._fade(("i", "c"), sprite, 100.0, 110.0, holds_floor=False) is None
-        radar._held_paint_next.clear()
-
-    def test_the_radar_screen_never_asks_which_renderer_is_on(self):
-        import inspect
-
-        assert "gpu" not in inspect.getsource(radar).replace("render_job", "")
-
-    def test_cpu_backend_shows_paint_as_a_stepped_dimmed_copy(self, monkeypatch):
-        monkeypatch.setattr(gpu, "_active", False)
-        monkeypatch.setattr(theme, "SWEEP_PERIOD_MS", 4000)
-        sprite = _dot((255, 255, 255, 255))
-        tip = (("c", "a"), (0.0, 0.0, 5.0, 5.0, (1, 2, 3, 255), 2))
-        held = [tip, (("i", "a"), (sprite, 5, 6)), (("i", "b"), (sprite, 7, 8))]
-        shown = render_job.stepped_held(held, {("i", "a"): (2.0, True)})
-        assert shown[0] is tip and shown[2] is held[2]
-        dim, x, y = shown[1][1]
-        assert (x, y) == (5, 6) and dim is not sprite and dim.get_at((2, 2))[3] < 255
-        again = render_job.stepped_held(held, {("i", "a"): (2.1, True)})
-        assert again[1][1][0] is dim
-        assert render_job.stepped_held(held, {("i", "a"): (40.0, False)})[1:] == [held[2]]
-        assert render_job.stepped_held(held, None) is held
-
-    def test_gpu_backend_shows_paint_as_a_smooth_alpha(self, monkeypatch):
-        monkeypatch.setattr(theme, "SWEEP_PERIOD_MS", 4000)
-        assert render_job.paint_alpha(None) == 1.0
-        assert render_job.paint_alpha((2.0, True)) == pytest.approx(
+        assert radar._held_alpha_next[("i", "a")] == pytest.approx(
             radar_classic.glow_brightness(2.0, 4.0)
         )
-
-    def test_departed_paint_lasts_as_long_on_either_renderer(self):
-        ages = [t / 10.0 for t in range(0, 120)]
-        gone = [radar_classic.paint_gone(t, 4.0) for t in ages]
-        assert not gone[0] and gone[-1]
-        first = gone.index(True)
-        assert all(gone[first:])
-        t = ages[first]
-        assert radar_classic.glow_brightness(t, 4.0, holds_floor=False) <= radar_classic.FADE_GONE
-        assert radar_classic.fade_brightness(
-            radar_classic.fade_level(t, 4.0), holds_floor=False
-        ) <= radar_classic.FADE_GONE
+        assert radar._fade(("i", "b"), sprite, 100.0, 100.0) is sprite
+        assert ("i", "b") not in radar._held_alpha_next
+        assert radar._fade(("i", "c"), sprite, 100.0, 110.0, holds_floor=False) is None
+        radar._held_alpha_next.clear()
 
 
 class TestHudTexture:
