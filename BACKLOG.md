@@ -507,11 +507,13 @@ DONE 2026-11-18: upstream 2026.11.16.2 merged by hand (sync issue 11: 14 files c
 Classic radar #295 while av8or carries it with the GPU fade on top). Every Classic hunk kept this side; #296 and the
 PICO icon mapping came in unchanged. The same conflict will recur when upstream merges the GPU renderer PR and the
 fade follow-up: resolve the same way (keep this side, check the diff against HEAD is only upstream's other changes).
-Follow-up PR queued 2026-11-17: fork branch feat/classic-gpu-fade at c525204, one commit on top of
-feat/gpu-renderer bde88d5 (stacked, 13 files). Suite 2627 passing bar the flaky ISS test. Device run on the Pi 4,
-Classic radar on the GPU renderer, 41 targets: 59 to 60 fps, interval p95 17.1 to 18.0 ms, no frames over 66 ms in
-four windows, continuous fade visible. Open it only after the GPU PR merges; if upstream squash-merges that PR,
-rebase this branch onto upstream main first (needs a force push of feat/classic-gpu-fade: ask Matt).
+Follow-up PR READY 2026-11-20: upstream squash-merged the GPU renderer as #297 (dab2257) and added a renderer switch
+confirmation (#298), released as 2026.11.20.1. av8or merged it (dae17ec, release 2026.11.20.10; the duplicated
+settings, portal and locale blocks took upstream's copy), fork main was fast-forwarded to upstream, and the Pi runs
+2026.11.20.10 (Smooth, GPU active). Fork branch feat/classic-gpu-fade is at 2ab1de5: upstream main merged in with a
+normal push (no rebase, no force push), 13 files and 208 insertions against upstream main, merges cleanly, suite
+2650 passing bar the flaky ISS test. Its fade files are identical to av8or's, which is what the Pi runs. Matt opens
+the PR himself. Not re-run on the Pi as the bare branch since c525204 (59 to 60 fps then).
 
 Profile note 2026-11-17 13:30 ET: from 07:33 to 13:19 the "update available" bubble was on screen (the Pi was three
 releases behind), and it alone cost 8.1 ms a frame (see the next section). Numbers from that span (57.5 fps, 97
