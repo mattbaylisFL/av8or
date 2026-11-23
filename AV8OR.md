@@ -129,13 +129,6 @@ no `/etc/flightscnr.env` edit is needed. Per-device settings (location, watch
 list, API keys) are entered on the device through the portal and never go into
 this repo.
 
-## Defaults that differ from upstream
-
-- **Renderer: GPU.** A new or factory-reset device, and a settings file saved
-  before the setting existed, start on the GPU renderer (`_defaults` in
-  `display/round_touch/settings.py`). A saved choice is kept, and the app
-  still falls back to CPU by itself where the GPU renderer cannot run.
-
 ## Pre-configuring a device
 
 Everything the portal stores lives in `/var/lib/flightscnr` and is wiped by the

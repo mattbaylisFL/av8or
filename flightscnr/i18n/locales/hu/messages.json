@@ -1096,7 +1096,7 @@
   "portal.radar.smooth_motion.label": "Folyamatos repülőgépmozgás",
   "portal.radar.smooth_motion.hint": "A repülőgépikonok a radarfrissítések között folyamatosan siklanak ahelyett, hogy ugrásszerűen változtatnának helyet. Kikapcsolva a megszokott, nem animált ikonok jelennek meg. A folyamatos be- és kirepüléshez be kell kapcsolni.",
   "portal.radar.renderer.label": "Megjelenítő",
-  "portal.radar.renderer.cpu": "CPU",
+  "portal.radar.renderer.cpu": "CPU (alapértelmezett)",
   "portal.radar.renderer.gpu": "GPU (ha az eszköz támogatja)",
   "portal.radar.renderer.hint": "A GPU a grafikus chipen rajzolja a radart: kisebb terhelés a processzornak, és a klasszikus radar folyamatosan halványul. Ha az eszközben nincs gyorsított megjelenítő, magától visszavált CPU-ra. A módosításhoz megerősítés kell, majd az alkalmazás ment és újraindul.",
   "portal.radar.renderer.failed": "A GPU nem tudott elindulni, ezért a CPU megjelenítő működik. Az újrapróbáláshoz válaszd a CPU-t, mentsd el, majd válaszd a GPU-t és mentsd el újra.",

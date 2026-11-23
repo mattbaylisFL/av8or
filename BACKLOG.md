@@ -604,7 +604,9 @@ deleting /var/lib/flightscnr/gpu_state.json and restarting; re-saving the same r
 `settings.set_renderer` did not clear it. Idea, not built: a "starting" left by a different boot (compare
 /proc/sys/kernel/random/boot_id stored in the state) gets one retry instead of latching, and the About screen or
 portal shows why the CPU renderer is in use. Upstream has the same guard, so offer it there if built.
-Matters more since 2026-11-23, when GPU became the av8or default (`_defaults["renderer"]` in settings.py): the
+Matters more on a device seeded to GPU. Decision 2026-11-23 (Matt): the code default stays cpu, as upstream; a
+GPU default was shipped in 2026.11.23.12 and reverted the same day. A device that should come back on GPU after a
+factory reset gets `"renderer": "gpu"` in /etc/flightscnr/seed/data/round_touch_settings.json instead. The
 state only turns "ok" after 120 radar frames, so it stays "starting" through the disclaimer, the Wi-Fi setup
 screen and the clocks. Pulling the power there (likely while a new owner sets up Wi-Fi) latches the device on the
 CPU renderer with no message. Read from the code, not reproduced. A clean stop or restart is fine (atexit clears it).

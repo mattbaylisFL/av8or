@@ -1096,7 +1096,7 @@
   "portal.radar.smooth_motion.label": "Mouvement fluide des aéronefs",
   "portal.radar.smooth_motion.hint": "Les icônes glissent entre les mises à jour du radar au lieu de sauter. Désactivé conserve les icônes habituelles. L'entrée/sortie fluide nécessite cette option.",
   "portal.radar.renderer.label": "Moteur de rendu",
-  "portal.radar.renderer.cpu": "CPU",
+  "portal.radar.renderer.cpu": "CPU (par défaut)",
   "portal.radar.renderer.gpu": "GPU (si l'appareil le permet)",
   "portal.radar.renderer.hint": "GPU dessine le radar sur la puce graphique : moins de charge pour le processeur, et le radar classique s'estompe en continu. Si l'appareil n'a pas de rendu accéléré, il revient au CPU de lui-même. Le changement demande confirmation, puis enregistre et redémarre l'app.",
   "portal.radar.renderer.failed": "Le GPU n'a pas pu démarrer, le rendu CPU est donc utilisé. Pour réessayer, choisissez CPU, enregistrez, puis choisissez GPU et enregistrez à nouveau.",
