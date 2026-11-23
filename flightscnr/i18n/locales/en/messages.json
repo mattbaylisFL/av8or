@@ -1096,7 +1096,7 @@
   "portal.radar.smooth_motion.label": "Smooth aircraft motion",
   "portal.radar.smooth_motion.hint": "Glide icons between radar updates instead of stepping them. Off keeps the usual baked icons. Fly smoothly in/out needs this on.",
   "portal.radar.renderer.label": "Renderer",
-  "portal.radar.renderer.cpu": "CPU (default)",
+  "portal.radar.renderer.cpu": "CPU",
   "portal.radar.renderer.gpu": "GPU (if the device supports it)",
   "portal.radar.renderer.hint": "GPU draws the radar on the graphics chip: lighter on the processor, and Classic radar fades smoothly. If the device has no accelerated renderer it goes back to CPU by itself. Changing it asks for confirmation, then saves and restarts the app.",
   "portal.radar.renderer.failed": "GPU could not start, so the CPU renderer is in use. Choose CPU, save, then GPU and save again to retry.",

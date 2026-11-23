@@ -1096,7 +1096,7 @@
   "portal.radar.smooth_motion.label": "Movimiento suave de aeronaves",
   "portal.radar.smooth_motion.hint": "Los iconos se deslizan entre actualizaciones del radar en lugar de saltar. Desactivado mantiene los iconos habituales. La entrada/salida suave necesita esto activado.",
   "portal.radar.renderer.label": "Renderizador",
-  "portal.radar.renderer.cpu": "CPU (predeterminado)",
+  "portal.radar.renderer.cpu": "CPU",
   "portal.radar.renderer.gpu": "GPU (si el dispositivo lo admite)",
   "portal.radar.renderer.hint": "GPU dibuja el radar en el chip gráfico: menos carga para el procesador, y el radar clásico se atenúa de forma continua. Si el dispositivo no tiene renderizador acelerado, vuelve a CPU por sí solo. Cambiarlo pide confirmación, luego guarda y reinicia la app.",
   "portal.radar.renderer.failed": "La GPU no pudo iniciarse, así que se usa el renderizador de CPU. Para reintentar, elige CPU, guarda, luego elige GPU y guarda de nuevo.",

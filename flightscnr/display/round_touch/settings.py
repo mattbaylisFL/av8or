@@ -631,6 +631,9 @@ _defaults = {
     # When True (default), lost-link / offline grace may open the setup hotspot.
     # First-boot with no saved Wi-Fi still enters setup even when False.
     "auto_wifi_setup_hotspot": True,
+    # av8or edition: a new or factory-reset device starts on the GPU renderer
+    # (upstream: cpu). gpu.py still falls back to cpu where it cannot run.
+    "renderer": "gpu",
 }
 
 # Live preview while calibrating facing (not persisted until save).
