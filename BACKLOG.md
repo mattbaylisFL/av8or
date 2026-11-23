@@ -596,6 +596,15 @@ C. Smooth sprites (item 3 above), reduced and spike first. Only "one texture per
    placement looks like the 16 quarter-pixel variants on the panel. If it does not match, drop it.
 Not GPU work, still worth doing: cache `auto_hotspot_enabled()` on the settings mtime (3.4 to 4 percent of samples).
 
+GPU start guard latched (seen 2026-11-23): the Pi rebooted on 2026-11-21 09:21 ET and ran on the CPU renderer for
+two days with "GPU renderer skipped (the last GPU start did not finish)". gpu_state.json was "starting" at that
+boot, so `gpu.open_display` wrote "failed" and every later start skipped the GPU. Cause of the reboot and of the
+stale "starting" not known (the journal is volatile; an unclean power-off around a start is a guess). Cleared by
+deleting /var/lib/flightscnr/gpu_state.json and restarting; re-saving the same renderer value through
+`settings.set_renderer` did not clear it. Idea, not built: a "starting" left by a different boot (compare
+/proc/sys/kernel/random/boot_id stored in the state) gets one retry instead of latching, and the About screen or
+portal shows why the CPU renderer is in use. Upstream has the same guard, so offer it there if built.
+
 ## Log noise (noticed 2026-11-04)
 
 DONE 2026-11-06 (release 2026.11.7.10, tests/test_log_latches.py): "ATC resuming", "ATC deferred" and the
