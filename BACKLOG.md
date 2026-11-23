@@ -523,6 +523,32 @@ for the clean figures (Smooth was profiled 13:25 to 13:29, then back to Classic)
 the bubble back until the Pi pulls: after pushing, `git pull --ff-only` in the Pi checkout and restart flightscnr.
 The 11:07 spot check of the pure branch ran 11:07:22 to 11:15:03 (spots.log); the later check-ins were cancelled.
 
+### GPU texture leak: sprites freed off the render thread (found and fixed 2026-11-23)
+
+Seen on the Pi after 6.5 hours on the GPU renderer: two kernel OOM kills, SSH
+and the portal stalled, `/sys/kernel/debug/dri/0/bo_stats` at 33,035 buffers
+and 1.05 GB (46 buffers and 35 MB right after a restart). Measured growth:
+about 150 buffers and 4.5 MB a minute with roughly 40 targets.
+
+Cause, confirmed with a standalone script on the device (hidden window,
+1,500 textures of 90x90): a `pygame._sdl2` Texture released on the render
+thread goes back to the driver and is reused; one released on another thread
+is never returned. SDL deletes the GL texture in the calling thread's context,
+and that thread has none. `gpu_present._textures` was a WeakKeyDictionary, so
+a texture died wherever its sprite died, and the radar drops sprites off the
+render thread.
+
+Fix: `_textures` holds the textures strongly, keyed by `id(sprite)`; the weak
+reference only queues the id, and `_texture()` / `present()` drop queued
+textures on the render thread. Tests: `TestSpriteTexturesFreeOnRenderThread`.
+
+Still open:
+- The same bug is in upstream (the renderer came from PR 299). Offer the fix.
+- Any new texture owner must follow the same rule: release on the render
+  thread only.
+- A watchdog on `bo_stats` or on available memory would have turned a silent
+  multi-hour leak into a log line.
+
 ## Next GPU candidates: CPU drawing worth moving (profiled 2026-11-17, Pi 4B, GPU renderer, 39 to 47 targets)
 
 Queued behind the Classic fade PR. Method: [frame] stage timings for the day, py-spy 0.4.3 at 250 Hz on the live
