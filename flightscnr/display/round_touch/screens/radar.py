@@ -19,6 +19,7 @@ import pygame
 
 from display.round_touch import (
     aircraft,
+    altitude_legend,
     airport_overlay,
     draw,
     geo,
@@ -31,7 +32,7 @@ from display.round_touch import (
     wildfire_overlay,
     earthquake_overlay,
 )
-from display.round_touch import airspace_overlay, cyclone_overlay
+from display.round_touch import airspace_overlay, cyclone_overlay, tfr_overlay
 from display.round_touch import alert_prefs, frame_debug, gpu
 from display.round_touch import radar_classic
 from display.round_touch import vessel_declutter
@@ -338,6 +339,7 @@ def _build_frame_layer(build: pygame.Surface, backdrop, flights, offset) -> bool
     build.blit(backdrop, (0, 0))
     _t = _rebuild_stage("2r_blit", _t)
     airspace_overlay.draw_airspace(build, pan_offset=offset)
+    tfr_overlay.draw_tfrs(build, pan_offset=offset)
     wildfire_overlay.draw_fires(build, pan_offset=offset)
     earthquake_overlay.draw_quakes(build, pan_offset=offset)
     cyclone_overlay.draw_cyclones(build, pan_offset=offset)
@@ -349,6 +351,7 @@ def _build_frame_layer(build: pygame.Surface, backdrop, flights, offset) -> bool
     _t = _rebuild_stage("2r_flights", _t)
     _draw_status(build, flights)
     _draw_map_attribution(build)
+    altitude_legend.draw(build)
     try:
         from display.round_touch import zoom_buttons
 
@@ -589,6 +592,7 @@ def draw_radar(
     wildfire_overlay.request_refresh()
     earthquake_overlay.request_refresh()
     airspace_overlay.request_refresh()
+    tfr_overlay.request_refresh()
     cyclone_overlay.request_refresh()
 
     if pan_mode:
@@ -643,12 +647,14 @@ def draw_radar(
         else:
             airport_overlay.draw_airports(surface, pan_offset=offset)
             airspace_overlay.draw_airspace(surface, pan_offset=offset)
+            tfr_overlay.draw_tfrs(surface, pan_offset=offset)
             wildfire_overlay.draw_fires(surface, pan_offset=offset)
             earthquake_overlay.draw_quakes(surface, pan_offset=offset)
             cyclone_overlay.draw_cyclones(surface, pan_offset=offset)
             _draw_flights(surface, flights)
             _draw_status(surface, flights)
             _draw_map_attribution(surface)
+            altitude_legend.draw(surface)
             from display.round_touch import zoom_buttons
 
             zoom_buttons.draw(surface)
@@ -2218,7 +2224,11 @@ def draw_live_icons(surface) -> None:
         if brightness is not None:
             # GPU renderer, on a frame composed on the CPU (pan, menus): the
             # nearest stepped copy stands in for the continuous fade.
-            sprite = _faded(sprite, int(round((1.0 - brightness) / step)), holds_floor=False) or sprite
+            sprite = _faded(sprite, int(round((1.0 - brightness) / step)), holds_floor=False)
+            if sprite is None:
+                # The stepped table runs out before the smooth curve does; the
+                # paint is as good as gone, so do not fall back to full brightness.
+                continue
         surface.blit(sprite, (int(x) - sprite.get_width() // 2, int(y) - sprite.get_height() // 2))
     rotation._blit_live_connectors(surface, (0, 0), 0, _live_connectors)
     for sprite, x, y in frame:
@@ -3132,7 +3142,11 @@ def _draw_map_attribution(surface):
     quake_text = earthquake_overlay.attribution_text()
     if quake_text:
         parts.append(quake_text)
-    for extra in (airspace_overlay.attribution_text(), cyclone_overlay.attribution_text()):
+    for extra in (
+        airspace_overlay.attribution_text(),
+        tfr_overlay.attribution_text(),
+        cyclone_overlay.attribution_text(),
+    ):
         if extra:
             parts.append(extra)
     if not parts:
@@ -3140,6 +3154,16 @@ def _draw_map_attribution(surface):
     text = " · ".join(parts)
     font = draw.load_font(theme.s(8))
     rendered = draw.render_text_cached(font, text, theme.HINT)
+    # The altitude scale uses the bottom rim, so the credits sit centred just
+    # above it, clear of the scale and its labels and of a bottom HUD.
+    legend = altitude_legend.rect()
+    if legend is not None:
+        bottom = legend.top - theme.s(4)
+        half = draw.circle_half_width_at_row(bottom - rendered.get_height(), rendered.get_height())
+        if half > 0 and rendered.get_width() > 2 * half:
+            rendered = pygame.transform.smoothscale(rendered, (2 * half, rendered.get_height()))
+        surface.blit(rendered, rendered.get_rect(midbottom=(theme.CENTER_X, bottom)))
+        return
     # Sit near the bottom rim (was ~0.52·R — mid-lower and too prominent).
     y = theme.CENTER_Y + theme.VISIBLE_RADIUS - theme.s(22) - rendered.get_height()
     half = draw.circle_half_width_at_row(y, rendered.get_height())
